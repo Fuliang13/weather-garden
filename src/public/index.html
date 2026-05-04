@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Weather Garden</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Météo immédiate</p>
+        <h1>Weather Garden</h1>
+        <p id="location" class="muted">Chargement…</p>
+      </div>
+      <button id="refreshButton" type="button">Actualiser</button>
+    </header>
+
+    <section id="alertCard" class="card alert-card">
+      <h2>Pluie</h2>
+      <p id="rainSummary" class="summary">Calcul en cours…</p>
+      <p id="rainEta" class="muted"></p>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <h2>Maintenant</h2>
+        <dl class="metrics">
+          <div><dt>Température</dt><dd id="temperature">—</dd></div>
+          <div><dt>Humidité</dt><dd id="humidity">—</dd></div>
+          <div><dt>Vent</dt><dd id="wind">—</dd></div>
+          <div><dt>Rafales</dt><dd id="gust">—</dd></div>
+        </dl>
+      </article>
+
+      <article class="card">
+        <h2>Horizons</h2>
+        <div id="horizons" class="horizons"></div>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Radar</h2>
+      <p id="radarStatus" class="muted">Chargement radar…</p>
+      <img id="radarImage" class="radar-image" alt="Radar RainViewer centré sur la position" hidden>
+    </section>
+
+    <section class="card">
+      <h2>Réglages</h2>
+      <form id="settingsForm" class="settings-form">
+        <label>
+          Seuil pluie sur l'horizon choisi, en mm
+          <input name="rainThresholdMm" type="number" min="0.1" step="0.1">
+        </label>
+        <label>
+          Horizon d'alerte, en minutes
+          <select name="rainAlertMinutes">
+            <option value="30">30</option>
+            <option value="60">60</option>
+            <option value="120">120</option>
+          </select>
+        </label>
+        <label>
+          Score minimum d'alerte
+          <input name="minConfidence" type="number" min="0" max="1" step="0.05">
+        </label>
+        <label>
+          Silence entre deux alertes, en minutes
+          <input name="quietMinutes" type="number" min="5" step="5">
+        </label>
+        <label class="checkbox-row">
+          <input name="enableRainAlerts" type="checkbox">
+          Activer les alertes pluie
+        </label>
+        <label class="checkbox-row">
+          <input name="enableNtfy" type="checkbox">
+          Activer ntfy
+        </label>
+        <label>
+          Topic ntfy
+          <input name="ntfyTopic" type="text" placeholder="weather-garden-...">
+        </label>
+        <button type="submit">Enregistrer</button>
+      </form>
+      <p id="settingsMessage" class="muted"></p>
+    </section>
+
+    <section class="card">
+      <h2>Sources</h2>
+      <ul id="sources" class="sources"></ul>
+      <p id="updatedAt" class="muted"></p>
+    </section>
+  </main>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

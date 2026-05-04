@@ -1,0 +1,236 @@
+:root {
+  color-scheme: light;
+  --bg: #f5f5f0;
+  --card: #ffffff;
+  --text: #1e2420;
+  --muted: #647067;
+  --border: #d9ded7;
+  --accent: #2d6a4f;
+  --soft: #eaf3ed;
+  --warn: #f4a261;
+  --danger: #c1121f;
+  --shadow: 0 12px 30px rgba(27, 38, 32, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  padding: 0.75rem 1rem;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.app-shell {
+  width: min(1040px, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: 1.5rem 0 3rem;
+}
+
+.hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0.25rem;
+  font-size: clamp(2rem, 8vw, 4rem);
+  letter-spacing: -0.06em;
+}
+
+h2 {
+  margin-bottom: 1rem;
+  font-size: 1.1rem;
+}
+
+.eyebrow {
+  margin-bottom: 0.25rem;
+  color: var(--accent);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  margin-bottom: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 1.5rem;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  padding: 1.25rem;
+}
+
+.alert-card {
+  border-left: 0.5rem solid var(--accent);
+}
+
+.alert-card[data-level="low"] {
+  border-left-color: var(--warn);
+}
+
+.alert-card[data-level="moderate"],
+.alert-card[data-level="high"] {
+  border-left-color: var(--danger);
+}
+
+.summary {
+  margin-bottom: 0.35rem;
+  font-size: 2rem;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.metrics div,
+.horizon-row {
+  border-radius: 1rem;
+  background: var(--soft);
+  padding: 0.9rem;
+}
+
+.metrics dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.metrics dd {
+  margin: 0.25rem 0 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.horizons {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.horizon-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.horizon-row[data-level="moderate"],
+.horizon-row[data-level="high"] {
+  outline: 2px solid color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.radar-image {
+  width: 100%;
+  max-height: 520px;
+  object-fit: contain;
+  border-radius: 1rem;
+  background: #1e2420;
+}
+
+.settings-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.settings-form label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.settings-form input,
+.settings-form select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.7rem;
+  color: var(--text);
+}
+
+.checkbox-row {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  color: var(--text) !important;
+}
+
+.checkbox-row input {
+  width: auto;
+}
+
+.sources {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.source-ok::marker {
+  color: var(--accent);
+}
+
+.source-ko::marker {
+  color: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .hero,
+  .grid,
+  .settings-form {
+    grid-template-columns: 1fr;
+  }
+
+  .hero {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .horizon-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
