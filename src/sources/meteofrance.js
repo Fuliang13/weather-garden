@@ -70,6 +70,9 @@ export async function fetchRainViewerRadar({ latitude, longitude, enabled = true
   const imageUrl = latestFrame
     ? `${data.host}${latestFrame.path}/512/7/${latitude}/${longitude}/2/1_1.png`
     : null;
+  const tileUrlTemplate = latestFrame
+    ? `${data.host}${latestFrame.path}/256/{z}/{x}/{y}/2/1_1.png`
+    : null;
 
   return {
     ok: !!imageUrl,
@@ -79,6 +82,7 @@ export async function fetchRainViewerRadar({ latitude, longitude, enabled = true
     generatedAt: data.generated ? new Date(data.generated * 1000).toISOString() : null,
     frameTime: latestFrame?.time ? new Date(latestFrame.time * 1000).toISOString() : null,
     imageUrl,
+    tileUrlTemplate,
     frames: frames.slice(-6)
   };
 }

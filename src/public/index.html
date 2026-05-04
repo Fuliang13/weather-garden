@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Weather Garden</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -40,10 +41,26 @@
       </article>
     </section>
 
-    <section class="card">
-      <h2>Radar</h2>
-      <p id="radarStatus" class="muted">Chargement radar…</p>
-      <img id="radarImage" class="radar-image" alt="Radar RainViewer centré sur la position" hidden>
+    <section class="card radar-card">
+      <div class="section-header">
+        <div>
+          <h2>Radar</h2>
+          <p id="radarStatus" class="muted">Chargement radar…</p>
+        </div>
+        <span id="radarAttribution" class="radar-attribution"></span>
+      </div>
+      <div id="radarMap" class="radar-map" role="img" aria-label="Carte radar centrée sur Louvigné-du-Désert"></div>
+      <div id="radarLegend" class="radar-legend" hidden>
+        <ul class="radar-legend-scale" aria-label="Légende de l'intensité des précipitations">
+          <li><span class="radar-swatch radar-light"></span>Pluie faible</li>
+          <li><span class="radar-swatch radar-moderate"></span>Modérée</li>
+          <li><span class="radar-swatch radar-heavy"></span>Forte</li>
+          <li><span class="radar-swatch radar-extreme"></span>Très forte</li>
+        </ul>
+        <p class="radar-legend-note">
+          Les couleurs indiquent l'intensité radar, pas le cumul exact au sol.
+        </p>
+      </div>
     </section>
 
     <section class="card">
@@ -89,6 +106,7 @@
     </section>
   </main>
 
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/app.js" type="module"></script>
 </body>
 </html>

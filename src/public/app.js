@@ -1,5 +1,9 @@
 const state = {
-  status: null
+  status: null,
+  radarMap: null,
+  radarBaseLayer: null,
+  radarRainLayer: null,
+  radarMarker: null
 };
 
 const els = {
@@ -14,7 +18,9 @@ const els = {
   gust: document.querySelector("#gust"),
   horizons: document.querySelector("#horizons"),
   radarStatus: document.querySelector("#radarStatus"),
-  radarImage: document.querySelector("#radarImage"),
+  radarMap: document.querySelector("#radarMap"),
+  radarLegend: document.querySelector("#radarLegend"),
+  radarAttribution: document.querySelector("#radarAttribution"),
   sources: document.querySelector("#sources"),
   updatedAt: document.querySelector("#updatedAt"),
   settingsForm: document.querySelector("#settingsForm"),
@@ -90,7 +96,7 @@ function renderStatus(status) {
   els.gust.textContent = formatValue(status.current.gustKmh, "km/h");
 
   renderHorizons(status.rain.horizons);
-  renderRadar(status.radar);
+  renderRadar(status.radar, status.location);
   renderSources(status.sources);
   renderSettings(status.settings);
   els.updatedAt.textContent = `Dernière mise à jour : ${formatDate(status.updatedAt)}`;
@@ -113,7 +119,7 @@ function renderHorizons(horizons) {
   });
 }
 
-function renderRadar(radar) {
+function renderRadar(radar, location) {
   const rainViewer = radar?.rainViewer;
   const meteoFrance = radar?.meteoFrance;
 
@@ -125,13 +131,97 @@ function renderRadar(radar) {
     els.radarStatus.textContent = "Aucun radar disponible pour le moment.";
   }
 
-  if (rainViewer?.imageUrl) {
-    els.radarImage.src = rainViewer.imageUrl;
-    els.radarImage.hidden = false;
+  const tileUrlTemplate = getRainViewerTileUrl(rainViewer);
+  renderRadarMap(location, tileUrlTemplate);
+
+  els.radarLegend.hidden = !tileUrlTemplate;
+  els.radarAttribution.textContent = tileUrlTemplate ? "RainViewer · OpenStreetMap" : "";
+}
+
+function renderRadarMap(location, tileUrlTemplate) {
+  if (!els.radarMap) {
     return;
   }
 
-  els.radarImage.hidden = true;
+  if (!window.L) {
+    els.radarMap.innerHTML = '<div class="radar-empty">Carte indisponible : Leaflet n\'a pas été chargé.</div>';
+    return;
+  }
+
+  const center = [
+    Number(location?.latitude),
+    Number(location?.longitude)
+  ];
+
+  if (!Number.isFinite(center[0]) || !Number.isFinite(center[1])) {
+    els.radarMap.innerHTML = '<div class="radar-empty">Position indisponible.</div>';
+    return;
+  }
+
+  ensureRadarMap(center, location);
+  updateRainLayer(tileUrlTemplate);
+
+  window.setTimeout(() => {
+    state.radarMap.invalidateSize();
+  }, 0);
+}
+
+function ensureRadarMap(center, location) {
+  if (!state.radarMap) {
+    state.radarMap = window.L.map(els.radarMap, {
+      zoomControl: true,
+      scrollWheelZoom: false
+    }).setView(center, 10);
+
+    state.radarBaseLayer = window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap"
+    }).addTo(state.radarMap);
+
+    state.radarMarker = window.L.marker(center).addTo(state.radarMap);
+  } else {
+    state.radarMap.setView(center, state.radarMap.getZoom() || 10);
+    state.radarMarker.setLatLng(center);
+  }
+
+  const markerContent = document.createElement("strong");
+  markerContent.textContent = location?.name || "Position météo";
+  state.radarMarker.bindPopup(markerContent);
+}
+
+function updateRainLayer(tileUrlTemplate) {
+  if (state.radarRainLayer) {
+    state.radarMap.removeLayer(state.radarRainLayer);
+    state.radarRainLayer = null;
+  }
+
+  if (!tileUrlTemplate) {
+    return;
+  }
+
+  state.radarRainLayer = window.L.tileLayer(tileUrlTemplate, {
+    opacity: 0.68,
+    zIndex: 20,
+    attribution: "RainViewer"
+  }).addTo(state.radarMap);
+}
+
+function getRainViewerTileUrl(rainViewer) {
+  return rainViewer?.tileUrlTemplate || deriveRainViewerTileUrl(rainViewer?.imageUrl);
+}
+
+function deriveRainViewerTileUrl(imageUrl) {
+  if (!imageUrl) {
+    return null;
+  }
+
+  const match = imageUrl.match(/^(https:\/\/[^/]+\/v2\/radar\/[^/]+)\/(?:256|512)\/\d+\/[^/]+\/[^/]+\/(.+)$/);
+
+  if (!match) {
+    return null;
+  }
+
+  return `${match[1]}/256/{z}/{x}/{y}/${match[2]}`;
 }
 
 function renderSources(sources) {
