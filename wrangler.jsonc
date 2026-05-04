@@ -1,36 +1,33 @@
 {
-  "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "weather-garden",
-  "main": "src/worker.js",
-  "compatibility_date": "2026-05-01",
-  "workers_dev": true,
-
-  "vars": {
-    "APP_LOCATION_NAME": "Louvigné-du-Désert",
-    "APP_LATITUDE": "48.47585833333334",
-    "APP_LONGITUDE": "-1.1030777777777777",
-    "APP_TIMEZONE": "Europe/Paris",
-    "METNO_USER_AGENT": "weather-garden/0.1 contact@example.com",
-    "NTFY_SERVER": "https://ntfy.sh",
-    "NTFY_TOPIC": "weather-garden-ton-topic-prive",
-    "ENABLE_NTFY": "true"
-  },
-
-  "assets": {
-    "directory": "./src/public",
-    "binding": "ASSETS",
-    "run_worker_first": true
-  },
-
-  "triggers": {
-    "crons": ["*/5 * * * *"]
-  },
-
-  "kv_namespaces": [
-    {
-      "binding": "WEATHER_KV",
-      "id": "REPLACE_WITH_KV_NAMESPACE_ID",
-      "preview_id": "REPLACE_WITH_KV_PREVIEW_NAMESPACE_ID"
-    }
-  ]
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "weather-garden",
+	"main": "src/worker.js",
+	"compatibility_date": "2026-05-01",
+	"workers_dev": true,
+	"vars": {
+		"APP_LOCATION_NAME": "Louvigné-du-Désert",
+		"APP_LATITUDE": "48.47585833333334",
+		"APP_LONGITUDE": "-1.1030777777777777",
+		"APP_TIMEZONE": "Europe/Paris",
+		"METNO_USER_AGENT": "weather-garden/0.1 contact@example.com",
+		"NTFY_SERVER": "https://ntfy.sh",
+		"ENABLE_NTFY": "true"
+	},
+	"assets": {
+		"directory": "./src/public",
+		"binding": "ASSETS",
+		"run_worker_first": true
+	},
+	"triggers": {
+		"crons": [
+			"*/5 * * * *"
+		]
+	},
+	"kv_namespaces": [
+		{
+			"binding": "WEATHER_KV",
+			"id": "3877dd8ad29a4c7ba8621e03a1f4c6f0",
+			"preview_id": "3877dd8ad29a4c7ba8621e03a1f4c6f0"
+		}
+	]
 }

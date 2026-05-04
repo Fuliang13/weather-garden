@@ -122,15 +122,19 @@ async function loadSettings(env) {
   const stored = await env.WEATHER_KV.get(KV_KEYS.settings, "json");
   const envDefaults = {
     ...DEFAULT_SETTINGS,
-    ntfyTopic: env.NTFY_TOPIC || "",
+    ntfyTopic: "",
     ntfyServer: env.NTFY_SERVER || DEFAULT_SETTINGS.ntfyServer,
     enableNtfy: !!env.NTFY_TOPIC
   };
 
-  return mergeSettings({
-    ...envDefaults,
-    ...(stored || {})
-  });
+	const safeStored = { ...(stored || {}) };
+	delete safeStored.ntfyTopic;
+
+	return mergeSettings({
+		...envDefaults,
+		...safeStored,
+		ntfyTopic: ""
+	});
 }
 
 function loadLocation(env) {
