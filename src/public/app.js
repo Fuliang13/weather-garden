@@ -56,8 +56,7 @@ async function saveSettings(event) {
     minConfidence: Number(formData.get("minConfidence")),
     quietMinutes: Number(formData.get("quietMinutes")),
     enableRainAlerts: formData.has("enableRainAlerts"),
-    enableNtfy: formData.has("enableNtfy"),
-    ntfyTopic: String(formData.get("ntfyTopic") || "").trim()
+    enableNtfy: formData.has("enableNtfy")
   };
 
   const response = await fetch("/api/settings", {
@@ -153,7 +152,6 @@ function renderSettings(settings) {
   els.settingsForm.quietMinutes.value = settings.quietMinutes;
   els.settingsForm.enableRainAlerts.checked = settings.enableRainAlerts;
   els.settingsForm.enableNtfy.checked = settings.enableNtfy;
-  els.settingsForm.ntfyTopic.value = settings.ntfyTopic || "";
 }
 
 function setLoading(isLoading) {

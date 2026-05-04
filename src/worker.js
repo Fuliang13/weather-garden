@@ -29,7 +29,7 @@ export default {
 
       if (url.pathname === "/api/settings" && request.method === "POST") {
         const body = await request.json();
-        const settings = mergeSettings(body);
+        const settings = sanitizePublicSettings(body);
         await env.WEATHER_KV.put(KV_KEYS.settings, JSON.stringify(settings));
         ctx.waitUntil(computeAndStoreStatus(env));
         return json(settings);
@@ -40,7 +40,7 @@ export default {
         await sendNtfy({
           env,
           settings,
-          title: "Test météo-jardin",
+          title: "Test meteo-jardin",
           message: "Notification ntfy OK pour Weather Garden."
         });
         return json({ ok: true });
@@ -127,14 +127,20 @@ async function loadSettings(env) {
     enableNtfy: !!env.NTFY_TOPIC
   };
 
-	const safeStored = { ...(stored || {}) };
-	delete safeStored.ntfyTopic;
+  return sanitizePublicSettings({
+    ...envDefaults,
+    ...(stored || {})
+  });
+}
 
-	return mergeSettings({
-		...envDefaults,
-		...safeStored,
-		ntfyTopic: ""
-	});
+function sanitizePublicSettings(settings = {}) {
+  const safeSettings = { ...settings };
+  delete safeSettings.ntfyTopic;
+
+  return mergeSettings({
+    ...safeSettings,
+    ntfyTopic: ""
+  });
 }
 
 function loadLocation(env) {
@@ -183,7 +189,7 @@ async function sendNtfy({ env, settings, title, message }) {
 
   const server = (settings.ntfyServer || env.NTFY_SERVER || "https://ntfy.sh").replace(/\/$/, "");
   const headers = {
-    "title": title,
+    "title": sanitizeHeaderValue(title) || "Weather Garden",
     "priority": "default"
   };
 
@@ -200,6 +206,13 @@ async function sendNtfy({ env, settings, title, message }) {
   if (!response.ok) {
     throw new Error(`ntfy HTTP ${response.status}`);
   }
+}
+
+function sanitizeHeaderValue(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]/g, "");
 }
 
 function isStale(isoDate, minutes) {
