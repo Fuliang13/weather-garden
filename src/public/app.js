@@ -202,6 +202,8 @@ function updateRainLayer(tileUrlTemplate) {
   state.radarRainLayer = window.L.tileLayer(tileUrlTemplate, {
     opacity: 0.68,
     zIndex: 20,
+    maxNativeZoom: 7,
+    maxZoom: 19,
     attribution: "RainViewer"
   }).addTo(state.radarMap);
 }
@@ -221,7 +223,7 @@ function deriveRainViewerTileUrl(imageUrl) {
     return null;
   }
 
-  return `${match[1]}/256/{z}/{x}/{y}/${match[2]}`;
+  return `${match[1]}/512/{z}/{x}/{y}/${match[2]}`;
 }
 
 function renderSources(sources) {

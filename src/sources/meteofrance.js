@@ -71,7 +71,7 @@ export async function fetchRainViewerRadar({ latitude, longitude, enabled = true
     ? `${data.host}${latestFrame.path}/512/7/${latitude}/${longitude}/2/1_1.png`
     : null;
   const tileUrlTemplate = latestFrame
-    ? `${data.host}${latestFrame.path}/256/{z}/{x}/{y}/2/1_1.png`
+    ? `${data.host}${latestFrame.path}/512/{z}/{x}/{y}/2/1_1.png`
     : null;
 
   return {
