@@ -9,6 +9,8 @@
   --soft: #eaf3ed;
   --warn: #f4a261;
   --danger: #c1121f;
+  --wet: #277da1;
+  --garden: #588157;
   --shadow: 0 12px 30px rgba(27, 38, 32, 0.08);
 }
 
@@ -109,16 +111,55 @@ h2 {
   border-left-color: var(--warn);
 }
 
+.alert-card[data-level="light"] {
+  border-left-color: var(--wet);
+}
+
 .alert-card[data-level="moderate"],
-.alert-card[data-level="high"] {
+.alert-card[data-level="heavy"] {
+  border-left-color: var(--warn);
+}
+
+.alert-card[data-level="high"],
+.alert-card[data-level="extreme"] {
   border-left-color: var(--danger);
 }
 
 .summary {
   margin-bottom: 0.35rem;
-  font-size: 2rem;
+  font-size: clamp(1.7rem, 5vw, 2.4rem);
   font-weight: 750;
   letter-spacing: -0.03em;
+}
+
+.rain-detail {
+  max-width: 60rem;
+  margin: 0.75rem 0 0;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.alert-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 0.9rem;
+  padding: 0.45rem 0.7rem;
+}
+
+.meta-pill strong {
+  color: var(--text);
 }
 
 .metrics {
@@ -153,7 +194,7 @@ h2 {
 
 .horizon-row {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: 0.8fr 1.1fr auto auto;
   align-items: center;
   gap: 0.75rem;
 }
@@ -161,6 +202,48 @@ h2 {
 .horizon-row[data-level="moderate"],
 .horizon-row[data-level="high"] {
   outline: 2px solid color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.garden-card {
+  border-left: 0.35rem solid var(--garden);
+}
+
+.garden-card[data-level="watch"] {
+  border-left-color: var(--warn);
+}
+
+.garden-card[data-level="risk"] {
+  border-left-color: var(--danger);
+}
+
+.garden-summary {
+  margin-bottom: 0;
+  font-size: 1.45rem;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+}
+
+.garden-badge {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--garden);
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 0.35rem 0.6rem;
+  white-space: nowrap;
+}
+
+.garden-details {
+  display: grid;
+  gap: 0.45rem;
+  margin: 1rem 0 0;
+  padding-left: 1.2rem;
+  color: var(--muted);
+}
+
+.garden-details li::marker {
+  color: var(--garden);
 }
 
 .section-header {

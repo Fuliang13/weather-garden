@@ -27,6 +27,14 @@ const ALERT_LABELS = {
   high: "Risque élevé"
 };
 
+const INTENSITY_LABELS = {
+  none: "Pas de pluie",
+  light: "Pluie faible",
+  moderate: "Pluie modérée",
+  heavy: "Pluie forte",
+  extreme: "Averse intense"
+};
+
 export function mergeSettings(settings = {}) {
   return {
     ...DEFAULT_SETTINGS,
@@ -63,19 +71,43 @@ export function buildWeatherStatus({
 
   const alertHorizon = horizonResults.find((item) => item.minutes === safeSettings.rainAlertMinutes) || horizonResults[0];
   const alertLevel = getAlertLevel(alertHorizon.score);
-  const etaMinutes = estimateRainEtaMinutes(openMeteo, nowMs, safeSettings.rainThresholdMm);
+  const current = buildCurrentConditions(openMeteo, metNorway);
+  const rainSignal = buildRainSignal({
+    current,
+    openMeteo,
+    alertHorizon,
+    horizonResults,
+    settings: safeSettings,
+    nowMs
+  });
+  const garden = buildGardenAdvice({
+    current,
+    rainSignal,
+    alertHorizon,
+    horizonResults
+  });
 
   return {
     location,
     updatedAt: now.toISOString(),
     settings: safeSettings,
-    current: buildCurrentConditions(openMeteo, metNorway),
+    current,
     rain: {
-      etaMinutes,
+      etaMinutes: rainSignal.etaMinutes,
+      activeNow: rainSignal.activeNow,
+      intensityLevel: rainSignal.intensityLevel,
+      intensityLabel: rainSignal.intensityLabel,
+      intensityMmPerHour: rainSignal.intensityMmPerHour,
+      expectedDurationMinutes: rainSignal.expectedDurationMinutes,
+      presentationLevel: rainSignal.activeNow ? rainSignal.intensityLevel : alertLevel,
       alertLevel,
       alertLabel: ALERT_LABELS[alertLevel],
-      shouldAlert: safeSettings.enableRainAlerts && ["moderate", "high"].includes(alertLevel),
-      horizons: horizonResults
+      riskLabel: ALERT_LABELS[alertLevel],
+      headline: buildRainHeadline(rainSignal, alertLevel),
+      detail: buildRainDetail(rainSignal, alertHorizon),
+      shouldAlert: shouldSendRainAlert(safeSettings, rainSignal, alertLevel),
+      horizons: horizonResults,
+      garden
     },
     radar: {
       meteoFrance: meteoFranceRadar || null,
@@ -98,6 +130,8 @@ function buildHorizonResult({ minutes, settings, openMeteo, metNorway, meteoFran
   ]);
 
   const precipitationMm = Math.max(arome.precipitationMm || 0, met.precipitationMm || 0);
+  const intensityMmPerHour = minutes > 0 ? precipitationMm / (minutes / 60) : 0;
+  const intensityLevel = getIntensityLevel(intensityMmPerHour);
 
   return {
     minutes,
@@ -105,6 +139,9 @@ function buildHorizonResult({ minutes, settings, openMeteo, metNorway, meteoFran
     confidence: confidenceLabel(weighted.value, weighted.weight),
     alertLevel: getAlertLevel(weighted.value),
     precipitationMm: round(precipitationMm, 2),
+    intensityMmPerHour: round(intensityMmPerHour, 2),
+    intensityLevel,
+    intensityLabel: INTENSITY_LABELS[intensityLevel],
     sources: {
       openMeteo: arome,
       metNorway: met,
@@ -125,6 +162,128 @@ function buildCurrentConditions(openMeteo, metNorway) {
     precipitationMm: pickNumber(current.precipitation, current.rain, 0),
     weatherCode: current.weather_code ?? null
   };
+}
+
+function buildRainSignal({ current, openMeteo, alertHorizon, horizonResults, settings, nowMs }) {
+  const minutelyRows = openMeteo?.minutely15 || [];
+  const currentPrecipitationMm = Math.max(current?.precipitationMm || 0, getMaxMinutelyPrecipitation(minutelyRows, nowMs, 20));
+  const currentIntensityMmPerHour = currentPrecipitationMm * 4;
+  const forecastIntensityMmPerHour = alertHorizon?.intensityMmPerHour || 0;
+  const activeNow = currentPrecipitationMm >= Math.max(settings.rainThresholdMm, 0.05) || isRainWeatherCode(current?.weatherCode);
+  const etaMinutes = activeNow ? 0 : estimateRainEtaMinutes(openMeteo, nowMs, settings.rainThresholdMm);
+  const expectedDurationMinutes = activeNow
+    ? estimateCurrentRainDurationMinutes(minutelyRows, nowMs, settings.rainThresholdMm, horizonResults)
+    : estimateFutureRainDurationMinutes(minutelyRows, nowMs, settings.rainThresholdMm, etaMinutes);
+  const intensityMmPerHour = activeNow ? currentIntensityMmPerHour : forecastIntensityMmPerHour;
+  const intensityLevel = getIntensityLevel(intensityMmPerHour);
+
+  return {
+    activeNow,
+    etaMinutes,
+    expectedDurationMinutes,
+    intensityMmPerHour: round(intensityMmPerHour, 2),
+    intensityLevel,
+    intensityLabel: INTENSITY_LABELS[intensityLevel]
+  };
+}
+
+function buildRainHeadline(rainSignal, alertLevel) {
+  if (rainSignal.activeNow) {
+    if (rainSignal.expectedDurationMinutes) {
+      return `${rainSignal.intensityLabel} pendant au moins ${formatDuration(rainSignal.expectedDurationMinutes)}`;
+    }
+
+    return `${rainSignal.intensityLabel} en cours`;
+  }
+
+  if (rainSignal.etaMinutes !== null && alertLevel !== "none") {
+    const label = rainSignal.intensityLevel === "none" ? "Pluie probable" : rainSignal.intensityLabel;
+    return `${label} probable dans ${rainSignal.etaMinutes} min`;
+  }
+
+  if (rainSignal.etaMinutes !== null) {
+    return `Pluie possible dans ${rainSignal.etaMinutes} min`;
+  }
+
+  return "Pas de pluie significative";
+}
+
+function buildRainDetail(rainSignal, alertHorizon) {
+  const risk = ALERT_LABELS[alertHorizon.alertLevel].toLowerCase();
+  const score = Math.round(alertHorizon.score * 100);
+  const intensity = rainSignal.intensityMmPerHour === null ? "—" : `${round(rainSignal.intensityMmPerHour, 1)} mm/h`;
+  const precipitation = alertHorizon.precipitationMm === null ? "—" : `${alertHorizon.precipitationMm} mm`;
+
+  if (rainSignal.activeNow) {
+    return `${capitalize(risk)} de poursuite sur ${alertHorizon.minutes} min · intensité estimée ${intensity} · cumul prévu ${precipitation}.`;
+  }
+
+  if (rainSignal.etaMinutes !== null) {
+    return `${capitalize(risk)} sur ${alertHorizon.minutes} min · score ${score} % · cumul prévu ${precipitation}.`;
+  }
+
+  return `Aucune pluie significative détectée sur l'horizon prioritaire · score ${score} %. `;
+}
+
+function buildGardenAdvice({ current, rainSignal, alertHorizon, horizonResults }) {
+  const twoHours = horizonResults.find((item) => item.minutes === 120) || horizonResults[horizonResults.length - 1];
+  const twoHourRain = twoHours?.precipitationMm || 0;
+  const activeWetRain = rainSignal.activeNow && ["moderate", "heavy", "extreme"].includes(rainSignal.intensityLevel);
+  const highRainLoad = twoHourRain >= 5 || ["heavy", "extreme"].includes(rainSignal.intensityLevel);
+
+  if (activeWetRain) {
+    return {
+      level: highRainLoad ? "risk" : "wet",
+      headline: highRainLoad ? "Arrosage inutile, sols à surveiller" : "Arrosage inutile",
+      details: [
+        `${rainSignal.intensityLabel} en cours avec environ ${formatNullableNumber(rainSignal.intensityMmPerHour)} mm/h.`,
+        `Cumul possible sur 2 h : ${formatNullableNumber(twoHourRain)} mm.`,
+        highRainLoad ? "Évite les semis fins, les repiquages fragiles et le travail du sol." : "Bonne pluie d'appoint pour le potager et les plantations récentes."
+      ]
+    };
+  }
+
+  if (alertHorizon.score >= 0.55) {
+    return {
+      level: "watch",
+      headline: "Arrosage à reporter",
+      details: [
+        `${rainSignal.intensityLabel === "Pas de pluie" ? "Pluie" : rainSignal.intensityLabel} attendue sur l'horizon ${alertHorizon.minutes} min.`,
+        `Cumul estimé : ${formatNullableNumber(alertHorizon.precipitationMm)} mm sur ${alertHorizon.minutes} min.`,
+        "Attends la fin de l'épisode avant d'arroser ou de traiter."
+      ]
+    };
+  }
+
+  if (current.temperatureC !== null && current.temperatureC <= 3) {
+    return {
+      level: "watch",
+      headline: "Surveillance froid utile",
+      details: [
+        `Température actuelle : ${formatNullableNumber(current.temperatureC)} °C.`,
+        "Protège les jeunes plants sensibles si la nuit reste froide.",
+        "Pas de pluie significative détectée pour le moment."
+      ]
+    };
+  }
+
+  return {
+    level: "ok",
+    headline: "Fenêtre jardin possible",
+    details: [
+      "Pas de pluie significative immédiate.",
+      `Cumul prévu sur 2 h : ${formatNullableNumber(twoHourRain)} mm.`,
+      "Arrosage léger possible seulement si le sol est sec en surface."
+    ]
+  };
+}
+
+function shouldSendRainAlert(settings, rainSignal, alertLevel) {
+  if (!settings.enableRainAlerts) {
+    return false;
+  }
+
+  return rainSignal.activeNow || ["moderate", "high"].includes(alertLevel);
 }
 
 function buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer, errors) {
@@ -217,13 +376,63 @@ function computeRadarScore(meteoFranceRadar) {
 
 function estimateRainEtaMinutes(openMeteo, nowMs, thresholdMm) {
   const rows = openMeteo?.minutely15 || [];
-  const firstRain = rows.find((row) => row.timeMs >= nowMs && (row.precipitation ?? row.rain ?? 0) >= thresholdMm);
+  const firstRain = rows.find((row) => row.timeMs >= nowMs - 5 * 60_000 && (row.precipitation ?? row.rain ?? 0) >= thresholdMm);
 
   if (!firstRain) {
     return null;
   }
 
   return Math.max(0, Math.round((firstRain.timeMs - nowMs) / 60_000));
+}
+
+function estimateCurrentRainDurationMinutes(rows, nowMs, thresholdMm, horizonResults) {
+  const duration = estimateContiguousRainDuration(rows, nowMs - 5 * 60_000, thresholdMm);
+
+  if (duration) {
+    return duration;
+  }
+
+  const wetHorizon = horizonResults.find((item) => item.precipitationMm >= thresholdMm);
+  return wetHorizon?.minutes || null;
+}
+
+function estimateFutureRainDurationMinutes(rows, nowMs, thresholdMm, etaMinutes) {
+  if (etaMinutes === null) {
+    return null;
+  }
+
+  return estimateContiguousRainDuration(rows, nowMs + etaMinutes * 60_000, thresholdMm);
+}
+
+function estimateContiguousRainDuration(rows, startMs, thresholdMm) {
+  const futureRows = rows
+    .filter((row) => typeof row.timeMs === "number" && row.timeMs >= startMs)
+    .sort((a, b) => a.timeMs - b.timeMs);
+  let duration = 0;
+
+  for (const row of futureRows) {
+    const precipitation = row.precipitation ?? row.rain ?? 0;
+
+    if (precipitation < thresholdMm) {
+      break;
+    }
+
+    duration += 15;
+  }
+
+  return duration || null;
+}
+
+function getMaxMinutelyPrecipitation(rows, nowMs, minutesAhead) {
+  const endMs = nowMs + minutesAhead * 60_000;
+
+  return max(rows
+    .filter((row) => typeof row.timeMs === "number" && row.timeMs >= nowMs - 5 * 60_000 && row.timeMs <= endMs)
+    .map((row) => row.precipitation ?? row.rain ?? 0));
+}
+
+function isRainWeatherCode(code) {
+  return [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82].includes(Number(code));
 }
 
 function getAlertLevel(score) {
@@ -240,6 +449,26 @@ function getAlertLevel(score) {
   }
 
   return "none";
+}
+
+function getIntensityLevel(mmPerHour) {
+  if (!Number.isFinite(mmPerHour) || mmPerHour < 0.1) {
+    return "none";
+  }
+
+  if (mmPerHour < 1) {
+    return "light";
+  }
+
+  if (mmPerHour < 4) {
+    return "moderate";
+  }
+
+  if (mmPerHour < 8) {
+    return "heavy";
+  }
+
+  return "extreme";
 }
 
 function confidenceLabel(score, availableWeight) {
@@ -278,6 +507,28 @@ function emptyMetric() {
 
 function isInFutureWindow(timeMs, nowMs, endMs) {
   return typeof timeMs === "number" && timeMs >= nowMs - 5 * 60_000 && timeMs <= endMs;
+}
+
+function formatDuration(minutes) {
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return remainingMinutes ? `${hours} h ${remainingMinutes} min` : `${hours} h`;
+  }
+
+  return `${minutes} min`;
+}
+
+function formatNullableNumber(value) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+
+  return String(round(value, 1));
+}
+
+function capitalize(value) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function sum(values) {

@@ -164,13 +164,17 @@ async function maybeSendRainAlert(env, status) {
     return;
   }
 
-  const eta = status.rain.etaMinutes === null ? "bientôt" : `dans ${status.rain.etaMinutes} min`;
-  const message = `Pluie probable ${eta} à ${status.location.name}. Score ${Math.round(horizon.score * 100)} %, cumul estimé ${horizon.precipitationMm ?? "?"} mm sur ${horizon.minutes} min.`;
+  const message = [
+    `${status.rain.headline} à ${status.location.name}.`,
+    status.rain.detail,
+    status.rain.garden?.headline ? `Jardin : ${status.rain.garden.headline}.` : null,
+    `Horizon ${horizon.minutes} min : ${Math.round(horizon.score * 100)} %, ${horizon.precipitationMm ?? "?"} mm.`
+  ].filter(Boolean).join("\n");
 
   await sendNtfy({
     env,
     settings: status.settings,
-    title: "Alerte pluie",
+    title: status.rain.activeNow ? status.rain.intensityLabel : "Alerte pluie",
     message
   });
 

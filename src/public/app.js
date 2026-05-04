@@ -12,11 +12,16 @@ const els = {
   alertCard: document.querySelector("#alertCard"),
   rainSummary: document.querySelector("#rainSummary"),
   rainEta: document.querySelector("#rainEta"),
+  rainDetail: document.querySelector("#rainDetail"),
+  rainMeta: document.querySelector("#rainMeta"),
   temperature: document.querySelector("#temperature"),
   humidity: document.querySelector("#humidity"),
   wind: document.querySelector("#wind"),
   gust: document.querySelector("#gust"),
   horizons: document.querySelector("#horizons"),
+  gardenCard: document.querySelector("#gardenCard"),
+  gardenSummary: document.querySelector("#gardenSummary"),
+  gardenDetails: document.querySelector("#gardenDetails"),
   radarStatus: document.querySelector("#radarStatus"),
   radarMap: document.querySelector("#radarMap"),
   radarLegend: document.querySelector("#radarLegend"),
@@ -84,11 +89,11 @@ async function saveSettings(event) {
 
 function renderStatus(status) {
   els.location.textContent = `${status.location.name} · ${formatCoord(status.location.latitude)}, ${formatCoord(status.location.longitude)}`;
-  els.alertCard.dataset.level = status.rain.alertLevel;
-  els.rainSummary.textContent = status.rain.alertLabel;
-  els.rainEta.textContent = status.rain.etaMinutes === null
-    ? "Aucune arrivée de pluie détectée dans les données immédiates."
-    : `Arrivée estimée : ${status.rain.etaMinutes} min.`;
+  els.alertCard.dataset.level = status.rain.presentationLevel || status.rain.alertLevel;
+  els.rainSummary.textContent = status.rain.headline || status.rain.alertLabel;
+  els.rainEta.textContent = buildRainEtaText(status.rain);
+  els.rainDetail.textContent = status.rain.detail || "";
+  renderRainMeta(status.rain);
 
   els.temperature.textContent = formatValue(status.current.temperatureC, "°C");
   els.humidity.textContent = formatValue(status.current.humidityPct, "%");
@@ -96,10 +101,38 @@ function renderStatus(status) {
   els.gust.textContent = formatValue(status.current.gustKmh, "km/h");
 
   renderHorizons(status.rain.horizons);
+  renderGarden(status.rain.garden);
   renderRadar(status.radar, status.location);
   renderSources(status.sources);
   renderSettings(status.settings);
   els.updatedAt.textContent = `Dernière mise à jour : ${formatDate(status.updatedAt)}`;
+}
+
+function renderRainMeta(rain) {
+  els.rainMeta.innerHTML = "";
+
+  [
+    { label: "Intensité", value: `${rain.intensityLabel} · ${formatValue(rain.intensityMmPerHour, "mm/h")}` },
+    { label: "Risque", value: `${rain.riskLabel} · ${rain.horizons?.[0] ? Math.round(rain.horizons[0].score * 100) : 0} % à 30 min` },
+    { label: "Durée", value: rain.expectedDurationMinutes ? `au moins ${formatDuration(rain.expectedDurationMinutes)}` : "non déterminée" }
+  ].forEach((item) => {
+    const pill = document.createElement("span");
+    pill.className = "meta-pill";
+    pill.innerHTML = `<strong>${item.label}</strong>${item.value}`;
+    els.rainMeta.append(pill);
+  });
+}
+
+function buildRainEtaText(rain) {
+  if (rain.activeNow) {
+    return "Pluie détectée maintenant.";
+  }
+
+  if (rain.etaMinutes === null) {
+    return "Aucune arrivée de pluie significative détectée dans les données immédiates.";
+  }
+
+  return `Arrivée estimée : ${rain.etaMinutes} min.`;
 }
 
 function renderHorizons(horizons) {
@@ -111,11 +144,29 @@ function renderHorizons(horizons) {
     row.dataset.level = item.alertLevel;
     row.innerHTML = `
       <strong>${item.minutes} min</strong>
-      <span>${Math.round(item.score * 100)} %</span>
-      <span>${item.confidence}</span>
+      <span>${item.intensityLabel}</span>
+      <span>${formatValue(item.intensityMmPerHour, "mm/h")}</span>
       <span>${formatValue(item.precipitationMm, "mm")}</span>
     `;
     els.horizons.append(row);
+  });
+}
+
+function renderGarden(garden) {
+  if (!garden) {
+    els.gardenCard.hidden = true;
+    return;
+  }
+
+  els.gardenCard.hidden = false;
+  els.gardenCard.dataset.level = garden.level;
+  els.gardenSummary.textContent = garden.headline;
+  els.gardenDetails.innerHTML = "";
+
+  garden.details.forEach((detail) => {
+    const item = document.createElement("li");
+    item.textContent = detail;
+    els.gardenDetails.append(item);
   });
 }
 
@@ -270,6 +321,20 @@ function formatDate(value) {
   }).format(new Date(value));
 }
 
+
+function formatDuration(minutes) {
+  if (!Number.isFinite(minutes)) {
+    return "—";
+  }
+
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return remainingMinutes ? `${hours} h ${remainingMinutes} min` : `${hours} h`;
+  }
+
+  return `${minutes} min`;
+}
 function formatCoord(value) {
   return Number(value).toFixed(6);
 }
