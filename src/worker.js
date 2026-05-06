@@ -3,12 +3,13 @@ import { fetchMetNorway } from "./sources/metNorway.js";
 import { fetchMeteoFranceRadar, fetchRainViewerRadar } from "./sources/meteofrance.js";
 import { fetchEcowittObservation } from "./sources/ecowitt.js";
 import { DEFAULT_LOCATION, DEFAULT_SETTINGS, buildWeatherStatus, mergeSettings } from "./scoring.js";
-import { buildGardenStatus, normalizeGardenState } from "./garden.js";
+import { buildGardenStatus, createDefaultGardenState, deleteGardenEntity, normalizeGardenState, upsertGardenEntity } from "./garden.js";
 
 const KV_KEYS = {
   settings: "settings",
   latestStatus: "latest_status",
   lastRainAlert: "last_alert_rain",
+  lastGardenAlert: "last_alert_garden",
   gardenState: "garden_state"
 };
 
@@ -17,13 +18,42 @@ export default {
     const url = new URL(request.url);
 
     try {
-      if (url.pathname === "/api/status") {
-        return json(await getLatestStatus(env));
+      if ((url.pathname === "/api/status" || url.pathname === "/api/public-status") && request.method === "GET") {
+        return json(sanitizePublicStatus(await getLatestStatus(env)));
       }
 
-      if (url.pathname === "/api/refresh") {
+      if (url.pathname === "/api/refresh" && request.method === "GET") {
         const status = await computeAndStoreStatus(env);
-        return json(status);
+        return json(sanitizePublicStatus(status));
+      }
+
+      if (url.pathname === "/api/debug/status" && request.method === "GET") {
+        return json(await getDebugStatus(env));
+      }
+
+      if (url.pathname === "/api/debug/sources" && request.method === "GET") {
+        const status = await computeAndStoreStatus(env);
+        return json({
+          ok: true,
+          updatedAt: status.updatedAt,
+          sources: status.sources,
+          errors: status.errors
+        });
+      }
+
+      if (url.pathname === "/api/debug/ecowitt" && request.method === "GET") {
+        return json(sanitizeDebugPayload(await fetchEcowittObservation({ env })));
+      }
+
+      if (url.pathname === "/api/debug/rain" && request.method === "GET") {
+        const status = await getLatestStatus(env);
+        return json({
+          ok: true,
+          updatedAt: status.updatedAt,
+          rain: status.rain,
+          stationObservation: status.stationObservation,
+          sources: status.sources
+        });
       }
 
       if (url.pathname === "/api/settings" && request.method === "GET") {
@@ -45,7 +75,31 @@ export default {
       if (url.pathname === "/api/garden" && request.method === "POST") {
         const body = await request.json();
         const gardenState = normalizeGardenState(body);
-        await env.WEATHER_KV.put(KV_KEYS.gardenState, JSON.stringify(gardenState));
+        await storeGardenState(env, gardenState);
+        ctx.waitUntil(computeAndStoreStatus(env));
+        return json(gardenState);
+      }
+
+      if (url.pathname === "/api/garden/reset" && request.method === "POST") {
+        const gardenState = createDefaultGardenState();
+        await storeGardenState(env, gardenState);
+        ctx.waitUntil(computeAndStoreStatus(env));
+        return json(gardenState);
+      }
+
+      if (url.pathname === "/api/garden/entities" && request.method === "POST") {
+        const body = await request.json();
+        const gardenState = upsertGardenEntity(await loadGardenState(env), body);
+        await storeGardenState(env, gardenState);
+        ctx.waitUntil(computeAndStoreStatus(env));
+        return json(gardenState);
+      }
+
+      const deleteGardenEntityMatch = url.pathname.match(/^\/api\/garden\/entities\/([^/]+)$/);
+
+      if (deleteGardenEntityMatch && request.method === "DELETE") {
+        const gardenState = deleteGardenEntity(await loadGardenState(env), decodeURIComponent(deleteGardenEntityMatch[1]));
+        await storeGardenState(env, gardenState);
         ctx.waitUntil(computeAndStoreStatus(env));
         return json(gardenState);
       }
@@ -67,19 +121,28 @@ export default {
     }
   },
 
-	async scheduled(event, env, ctx) {
-		try {
-			await runScheduledCheck(env);
-		} catch (error) {
-			console.error("Scheduled check failed:", error);
-			throw error;
-		}
-	}
+  async scheduled(event, env, ctx) {
+    try {
+      await runScheduledCheck(env);
+    } catch (error) {
+      console.error("Scheduled check failed:", error);
+      throw error;
+    }
+  }
 };
 
 async function runScheduledCheck(env) {
   const status = await computeAndStoreStatus(env);
-  await maybeSendRainAlert(env, status);
+  await runOptionalScheduledStep("rain alert", () => maybeSendRainAlert(env, status));
+  await runOptionalScheduledStep("garden alerts", () => maybeSendGardenAlerts(env, status));
+}
+
+async function runOptionalScheduledStep(label, fn) {
+  try {
+    await fn();
+  } catch (error) {
+    console.error(`Scheduled ${label} failed:`, error);
+  }
 }
 
 async function getLatestStatus(env) {
@@ -90,6 +153,27 @@ async function getLatestStatus(env) {
   }
 
   return computeAndStoreStatus(env);
+}
+
+async function getDebugStatus(env) {
+  const status = await getLatestStatus(env);
+
+  return sanitizeDebugPayload({
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    endpoints: [
+      "/api/public-status",
+      "/api/status",
+      "/api/refresh",
+      "/api/debug/status",
+      "/api/debug/sources",
+      "/api/debug/ecowitt",
+      "/api/debug/rain",
+      "/api/garden",
+      "/api/settings"
+    ],
+    status
+  });
 }
 
 async function computeAndStoreStatus(env) {
@@ -120,9 +204,11 @@ async function computeAndStoreStatus(env) {
     meteoFranceRadar,
     rainViewer,
     ecowittObservation,
-    garden: buildGardenStatus(gardenState),
+    garden: null,
     errors
   });
+
+  status.garden = buildGardenStatus(gardenState, status, settings);
 
   await env.WEATHER_KV.put(KV_KEYS.latestStatus, JSON.stringify(status));
   return status;
@@ -154,7 +240,16 @@ async function loadSettings(env) {
 
 async function loadGardenState(env) {
   const stored = await env.WEATHER_KV.get(KV_KEYS.gardenState, "json");
+
+  if (!stored) {
+    return createDefaultGardenState();
+  }
+
   return normalizeGardenState(stored || {});
+}
+
+async function storeGardenState(env, gardenState) {
+  await env.WEATHER_KV.put(KV_KEYS.gardenState, JSON.stringify(normalizeGardenState(gardenState)));
 }
 
 function sanitizePublicSettings(settings = {}) {
@@ -208,6 +303,44 @@ async function maybeSendRainAlert(env, status) {
   }));
 }
 
+async function maybeSendGardenAlerts(env, status) {
+  if (!status.settings.enableGardenAlerts || !status.settings.enableNtfy) {
+    return;
+  }
+
+  const activeAlerts = status.garden?.alerts?.active || [];
+  const notifyAlerts = activeAlerts.filter((alert) => ["urgent", "risk", "watch"].includes(alert.level));
+
+  if (!notifyAlerts.length) {
+    return;
+  }
+
+  const lastAlert = await env.WEATHER_KV.get(KV_KEYS.lastGardenAlert, "json");
+  const currentSignature = notifyAlerts.map((alert) => alert.id).sort().join("|");
+
+  if (lastAlert?.signature === currentSignature && !isStale(lastAlert.sentAt, status.settings.quietMinutes)) {
+    return;
+  }
+
+  const topAlerts = notifyAlerts.slice(0, 5);
+  const message = topAlerts.map((alert) => {
+    const entity = status.garden.entities.find((item) => item.id === alert.entityId);
+    return `${entity?.name || alert.entityId || "Jardin"} · ${alert.headline}`;
+  }).join("\n");
+
+  await sendNtfy({
+    env,
+    settings: status.settings,
+    title: "Alertes jardin",
+    message
+  });
+
+  await env.WEATHER_KV.put(KV_KEYS.lastGardenAlert, JSON.stringify({
+    sentAt: new Date().toISOString(),
+    signature: currentSignature
+  }));
+}
+
 async function sendNtfy({ env, settings, title, message }) {
   const topic = settings.ntfyTopic || env.NTFY_TOPIC;
 
@@ -234,6 +367,24 @@ async function sendNtfy({ env, settings, title, message }) {
   if (!response.ok) {
     throw new Error(`ntfy HTTP ${response.status}`);
   }
+}
+
+function sanitizePublicStatus(status) {
+  return sanitizeDebugPayload(status);
+}
+
+function sanitizeDebugPayload(value) {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeDebugPayload);
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !["raw", "url"].includes(key))
+    .map(([key, child]) => [key, sanitizeDebugPayload(child)]));
 }
 
 function sanitizeHeaderValue(value) {

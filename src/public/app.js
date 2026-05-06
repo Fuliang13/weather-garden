@@ -2,17 +2,22 @@ const AUTO_REFRESH_MS = 5 * 60 * 1000;
 
 const state = {
   status: null,
+  gardenState: null,
   radarMap: null,
   radarBaseLayer: null,
   radarRainLayer: null,
   radarMarker: null,
   refreshTimer: null,
+  countdownTimer: null,
+  nextRefreshAt: null,
   isLoading: false
 };
 
 const els = {
   location: document.querySelector("#location"),
   refreshStatus: document.querySelector("#refreshStatus"),
+  navButtons: document.querySelectorAll("[data-panel-target]"),
+  panels: document.querySelectorAll("[data-panel]"),
   alertCard: document.querySelector("#alertCard"),
   rainSummary: document.querySelector("#rainSummary"),
   rainEta: document.querySelector("#rainEta"),
@@ -24,16 +29,24 @@ const els = {
   stationHumidity: document.querySelector("#stationHumidity"),
   stationWind: document.querySelector("#stationWind"),
   stationGust: document.querySelector("#stationGust"),
+  stationPressure: document.querySelector("#stationPressure"),
+  stationRain: document.querySelector("#stationRain"),
+  stationUv: document.querySelector("#stationUv"),
   currentSource: document.querySelector("#currentSource"),
   temperature: document.querySelector("#temperature"),
   humidity: document.querySelector("#humidity"),
   wind: document.querySelector("#wind"),
   gust: document.querySelector("#gust"),
+  horizonsCard: document.querySelector("#horizonsCard"),
   horizons: document.querySelector("#horizons"),
   gardenCard: document.querySelector("#gardenCard"),
   gardenBadge: document.querySelector("#gardenBadge"),
   gardenSummary: document.querySelector("#gardenSummary"),
   gardenDetails: document.querySelector("#gardenDetails"),
+  gardenEntitiesList: document.querySelector("#gardenEntitiesList"),
+  gardenEntityForm: document.querySelector("#gardenEntityForm"),
+  gardenEntityMessage: document.querySelector("#gardenEntityMessage"),
+  resetGardenButton: document.querySelector("#resetGardenButton"),
   gardenAlertsCard: document.querySelector("#gardenAlertsCard"),
   gardenAlertsTitle: document.querySelector("#gardenAlertsTitle"),
   gardenAlertsSummary: document.querySelector("#gardenAlertsSummary"),
@@ -44,11 +57,27 @@ const els = {
   radarAttribution: document.querySelector("#radarAttribution"),
   sources: document.querySelector("#sources"),
   updatedAt: document.querySelector("#updatedAt"),
+  publicJsonLink: document.querySelector("#publicJsonLink"),
+  debugStatusLink: document.querySelector("#debugStatusLink"),
+  debugSourcesLink: document.querySelector("#debugSourcesLink"),
+  debugEcowittLink: document.querySelector("#debugEcowittLink"),
+  debugRainLink: document.querySelector("#debugRainLink"),
+  debugOutput: document.querySelector("#debugOutput"),
+  debugRefreshButton: document.querySelector("#debugRefreshButton"),
+  ntfyTestButton: document.querySelector("#ntfyTestButton"),
   settingsForm: document.querySelector("#settingsForm"),
   settingsMessage: document.querySelector("#settingsMessage")
 };
 
-els.settingsForm.addEventListener("submit", saveSettings);
+els.settingsForm?.addEventListener("submit", saveSettings);
+els.gardenEntityForm?.addEventListener("submit", saveGardenEntity);
+els.resetGardenButton?.addEventListener("click", resetGarden);
+els.debugRefreshButton?.addEventListener("click", () => loadDebugJson("/api/debug/status"));
+els.ntfyTestButton?.addEventListener("click", sendTestNotification);
+
+els.navButtons.forEach((button) => {
+  button.addEventListener("click", () => activatePanel(button.dataset.panelTarget));
+});
 
 loadStatus(false);
 startAutoRefresh();
@@ -69,7 +98,9 @@ async function loadStatus(forceRefresh) {
     }
 
     state.status = status;
+    state.gardenState = await fetchGardenState();
     renderStatus(status);
+    scheduleNextRefresh();
   } catch (error) {
     els.rainSummary.textContent = error.message;
     els.alertCard.dataset.level = "high";
@@ -81,7 +112,25 @@ async function loadStatus(forceRefresh) {
 
 function startAutoRefresh() {
   window.clearInterval(state.refreshTimer);
+  window.clearInterval(state.countdownTimer);
   state.refreshTimer = window.setInterval(() => loadStatus(false), AUTO_REFRESH_MS);
+  state.countdownTimer = window.setInterval(updateRefreshCountdown, 1000);
+  scheduleNextRefresh();
+}
+
+function scheduleNextRefresh() {
+  state.nextRefreshAt = Date.now() + AUTO_REFRESH_MS;
+  updateRefreshCountdown();
+}
+
+async function fetchGardenState() {
+  const response = await fetch("/api/garden");
+
+  if (!response.ok) {
+    return null;
+  }
+
+  return response.json();
 }
 
 async function saveSettings(event) {
@@ -93,7 +142,12 @@ async function saveSettings(event) {
     minConfidence: Number(formData.get("minConfidence")),
     quietMinutes: Number(formData.get("quietMinutes")),
     enableRainAlerts: formData.has("enableRainAlerts"),
-    enableNtfy: formData.has("enableNtfy")
+    enableGardenAlerts: formData.has("enableGardenAlerts"),
+    enableNtfy: formData.has("enableNtfy"),
+    frostWatchTempC: Number(formData.get("frostWatchTempC")),
+    windGustRiskKmh: Number(formData.get("windGustRiskKmh")),
+    heavyRain2hMm: Number(formData.get("heavyRain2hMm")),
+    diseaseHumidityPct: Number(formData.get("diseaseHumidityPct"))
   };
 
   const response = await fetch("/api/settings", {
@@ -113,6 +167,121 @@ async function saveSettings(event) {
   await loadStatus(true);
 }
 
+async function saveGardenEntity(event) {
+  event.preventDefault();
+  const formData = new FormData(els.gardenEntityForm);
+  const name = String(formData.get("name") || "").trim();
+
+  if (!name) {
+    els.gardenEntityMessage.textContent = "Nom obligatoire.";
+    return;
+  }
+
+  const entity = {
+    id: String(formData.get("id") || name),
+    type: formData.get("type"),
+    name,
+    tags: String(formData.get("tags") || ""),
+    notes: String(formData.get("notes") || ""),
+    position: {
+      label: String(formData.get("positionLabel") || "")
+    }
+  };
+
+  const response = await fetch("/api/garden/entities", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(entity)
+  });
+
+  if (!response.ok) {
+    els.gardenEntityMessage.textContent = "Erreur lors de l'enregistrement.";
+    return;
+  }
+
+  els.gardenEntityForm.reset();
+  els.gardenEntityMessage.textContent = "Entité enregistrée.";
+  await loadStatus(true);
+}
+
+async function deleteGardenEntity(id) {
+  const response = await fetch(`/api/garden/entities/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+
+  if (!response.ok) {
+    els.gardenEntityMessage.textContent = "Suppression impossible.";
+    return;
+  }
+
+  els.gardenEntityMessage.textContent = "Entité supprimée.";
+  await loadStatus(true);
+}
+
+async function resetGarden() {
+  const response = await fetch("/api/garden/reset", {
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    els.gardenEntityMessage.textContent = "Réinitialisation impossible.";
+    return;
+  }
+
+  els.gardenEntityMessage.textContent = "Jardin réinitialisé.";
+  await loadStatus(true);
+}
+
+async function sendTestNotification() {
+  els.settingsMessage.textContent = "Envoi du test…";
+
+  try {
+    const response = await fetch("/api/alerts/test", {
+      method: "POST"
+    });
+    const data = await readJsonResponse(response);
+
+    if (!response.ok || data.ok === false) {
+      throw new Error(data.error || "Notification de test impossible.");
+    }
+
+    els.settingsMessage.textContent = "Notification de test envoyée.";
+  } catch (error) {
+    els.settingsMessage.textContent = error.message;
+  }
+}
+
+async function loadDebugJson(path) {
+  els.debugOutput.textContent = "Chargement…";
+
+  try {
+    const response = await fetch(path);
+    const data = await readJsonResponse(response);
+    els.debugOutput.textContent = JSON.stringify(data, null, 2);
+  } catch (error) {
+    els.debugOutput.textContent = JSON.stringify({ ok: false, error: error.message }, null, 2);
+  }
+}
+
+async function readJsonResponse(response) {
+  const text = await response.text();
+
+  if (!text) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    return {
+      ok: false,
+      error: text
+    };
+  }
+}
+
 function renderStatus(status) {
   const rain = status.rain || {};
   const noSignificantRain = isNoSignificantRain(rain);
@@ -127,14 +296,15 @@ function renderStatus(status) {
   renderRainMeta(rain);
   renderStationObservation(status.stationObservation || status.observation?.station || null);
   renderCurrentForecast(status.current);
-  renderHorizons(rain.horizons || []);
+  renderHorizons(rain.horizons || [], noSignificantRain);
   renderGarden(rain.garden, status.garden);
+  renderGardenEntities(status.garden?.entities || []);
   renderGardenAlerts(status.garden?.alerts);
   renderRadar(status.radar, status.location);
-  renderSources(status.sources);
-  renderSettings(status.settings);
+  renderSources(status.sources || []);
+  renderSettings(status.settings || {});
+  renderDebugLinks();
   els.updatedAt.textContent = `Dernière mise à jour : ${formatDate(status.updatedAt)}`;
-  els.refreshStatus.textContent = `Mise à jour automatique · toutes les ${formatDuration(AUTO_REFRESH_MS / 60_000)}.`;
 }
 
 function renderRainMeta(rain) {
@@ -150,7 +320,8 @@ function renderRainMeta(rain) {
   [
     { label: "Intensité", value: `${rain.intensityLabel} · ${formatValue(rain.intensityMmPerHour, "mm/h")}` },
     { label: "Risque", value: `${rain.riskLabel} · ${rain.horizons?.[0] ? Math.round(rain.horizons[0].score * 100) : 0} % à 30 min` },
-    { label: "Durée", value: rain.expectedDurationMinutes ? formatDuration(rain.expectedDurationMinutes) : "non déterminée" }
+    { label: "Durée", value: rain.expectedDurationMinutes ? formatDuration(rain.expectedDurationMinutes) : "non déterminée" },
+    { label: "Source", value: rain.observation?.source === "station" ? "station locale" : "prévision" }
   ].forEach((item) => {
     const pill = document.createElement("span");
     pill.className = "meta-pill";
@@ -183,19 +354,15 @@ function renderStationObservation(station) {
 
   const current = station.current;
   els.stationCard.hidden = false;
-  els.stationSource.textContent = `${station.label || uiText("@{%Station météo%}")}${station.updatedAt ? ` · ${formatDate(station.updatedAt)}` : ""}`;
+  els.stationCard.dataset.stale = String(!!station.stale);
+  els.stationSource.textContent = `${station.label || uiText("@{%Station météo%}")}${station.updatedAt ? ` · ${formatDate(station.updatedAt)}` : ""}${station.stale ? " · données anciennes" : ""}`;
   els.stationTemperature.textContent = formatValue(current.temperatureC, "°C");
   els.stationHumidity.textContent = formatValue(current.humidityPct, "%");
   els.stationWind.textContent = formatValue(current.windKmh, "km/h");
   els.stationGust.textContent = formatValue(current.gustKmh, "km/h");
-
-  if (current.rainRateMmPerHour !== null || current.dailyRainMm !== null) {
-    els.stationSource.textContent += ` · pluie ${formatValue(current.rainRateMmPerHour, "mm/h")} · jour ${formatValue(current.dailyRainMm, "mm")}`;
-  }
-
-  if (current.uvIndex !== null || current.solarWm2 !== null) {
-    els.stationSource.textContent += ` · UV ${formatValue(current.uvIndex, "")} · solaire ${formatValue(current.solarWm2, "W/m²")}`;
-  }
+  els.stationPressure.textContent = formatValue(current.pressureHpa, "hPa");
+  els.stationRain.textContent = `${formatValue(current.rainRateMmPerHour, "mm/h")} · jour ${formatValue(current.dailyRainMm, "mm")}`;
+  els.stationUv.textContent = `${formatValue(current.uvIndex, "")} · ${formatValue(current.solarWm2, "W/m²")}`;
 }
 
 function renderCurrentForecast(current) {
@@ -206,15 +373,20 @@ function renderCurrentForecast(current) {
   els.gust.textContent = formatValue(current?.gustKmh, "km/h");
 }
 
-function renderHorizons(horizons) {
+function renderHorizons(horizons, noSignificantRain) {
   els.horizons.innerHTML = "";
+  els.horizonsCard.hidden = noSignificantRain;
+
+  if (noSignificantRain) {
+    return;
+  }
 
   horizons.forEach((item) => {
     const row = document.createElement("div");
     row.className = "horizon-row";
     row.dataset.level = item.alertLevel;
     row.innerHTML = `
-      <strong>${item.minutes} min</strong>
+      <strong>${formatDuration(item.minutes)}</strong>
       <span>${item.intensityLabel}</span>
       <span>${formatValue(item.intensityMmPerHour, "mm/h")}</span>
       <span>${formatValue(item.precipitationMm, "mm")}</span>
@@ -242,6 +414,35 @@ function renderGarden(garden, gardenState) {
   });
 }
 
+function renderGardenEntities(entities) {
+  els.gardenEntitiesList.innerHTML = "";
+
+  if (!entities.length) {
+    const item = document.createElement("li");
+    item.className = "empty-row";
+    item.textContent = "Aucune entité jardin.";
+    els.gardenEntitiesList.append(item);
+    return;
+  }
+
+  entities.forEach((entity) => {
+    const item = document.createElement("li");
+    item.className = "garden-entity-row";
+
+    const body = document.createElement("div");
+    body.innerHTML = `<strong>${entity.name}</strong><span>${entity.type}${entity.tags?.length ? ` · ${entity.tags.join(", ")}` : ""}</span>`;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary danger-button";
+    button.textContent = "Supprimer";
+    button.addEventListener("click", () => deleteGardenEntity(entity.id));
+
+    item.append(body, button);
+    els.gardenEntitiesList.append(item);
+  });
+}
+
 function renderGardenAlerts(alerts) {
   const activeAlerts = alerts?.active || [];
 
@@ -259,7 +460,12 @@ function renderGardenAlerts(alerts) {
 
   activeAlerts.forEach((alert) => {
     const item = document.createElement("li");
-    item.textContent = alert.entityId ? `${alert.headline || alert.type} · ${alert.entityId}` : alert.headline || alert.type;
+    const headline = document.createElement("strong");
+    const details = document.createElement("span");
+    headline.textContent = alert.entityId ? `${alert.headline || alert.type} · ${alert.entityId}` : alert.headline || alert.type;
+    details.textContent = (alert.details || []).join(" · ");
+    item.dataset.level = alert.level;
+    item.append(headline, details);
     els.gardenAlertsList.append(item);
   });
 }
@@ -353,24 +559,6 @@ function updateRainLayer(tileUrlTemplate) {
   }).addTo(state.radarMap);
 }
 
-function getRainViewerTileUrl(rainViewer) {
-  return rainViewer?.tileUrlTemplate || deriveRainViewerTileUrl(rainViewer?.imageUrl);
-}
-
-function deriveRainViewerTileUrl(imageUrl) {
-  if (!imageUrl) {
-    return null;
-  }
-
-  const match = imageUrl.match(/^(https:\/\/[^/]+\/v2\/radar\/[^/]+)\/(?:256|512)\/\d+\/[^/]+\/[^/]+\/(.+)$/);
-
-  if (!match) {
-    return null;
-  }
-
-  return `${match[1]}/512/{z}/{x}/{y}/${match[2]}`;
-}
-
 function renderSources(sources) {
   els.sources.innerHTML = "";
 
@@ -393,6 +581,71 @@ function renderSources(sources) {
     item.append(badge, body);
     els.sources.append(item);
   });
+}
+
+function renderSettings(settings) {
+  setFieldValue("rainThresholdMm", settings.rainThresholdMm);
+  setFieldValue("rainAlertMinutes", settings.rainAlertMinutes);
+  setFieldValue("minConfidence", settings.minConfidence);
+  setFieldValue("quietMinutes", settings.quietMinutes);
+  setFieldChecked("enableRainAlerts", settings.enableRainAlerts);
+  setFieldChecked("enableGardenAlerts", settings.enableGardenAlerts);
+  setFieldChecked("enableNtfy", settings.enableNtfy);
+  setFieldValue("frostWatchTempC", settings.frostWatchTempC);
+  setFieldValue("windGustRiskKmh", settings.windGustRiskKmh);
+  setFieldValue("heavyRain2hMm", settings.heavyRain2hMm);
+  setFieldValue("diseaseHumidityPct", settings.diseaseHumidityPct);
+}
+
+function renderDebugLinks() {
+  els.publicJsonLink.href = "/api/public-status";
+  els.debugStatusLink.href = "/api/debug/status";
+  els.debugSourcesLink.href = "/api/debug/sources";
+  els.debugEcowittLink.href = "/api/debug/ecowitt";
+  els.debugRainLink.href = "/api/debug/rain";
+}
+
+function activatePanel(name) {
+  els.navButtons.forEach((button) => {
+    button.dataset.active = String(button.dataset.panelTarget === name);
+  });
+  els.panels.forEach((panel) => {
+    panel.hidden = panel.dataset.panel !== name;
+  });
+
+  if (name === "diagnostic") {
+    loadDebugJson("/api/debug/status");
+  }
+}
+
+function setFieldValue(name, value) {
+  if (els.settingsForm?.[name] && value !== undefined && value !== null) {
+    els.settingsForm[name].value = value;
+  }
+}
+
+function setFieldChecked(name, value) {
+  if (els.settingsForm?.[name]) {
+    els.settingsForm[name].checked = !!value;
+  }
+}
+
+function getRainViewerTileUrl(rainViewer) {
+  return rainViewer?.tileUrlTemplate || deriveRainViewerTileUrl(rainViewer?.imageUrl);
+}
+
+function deriveRainViewerTileUrl(imageUrl) {
+  if (!imageUrl) {
+    return null;
+  }
+
+  const match = imageUrl.match(/^(https:\/\/[^/]+\/v2\/radar\/[^/]+)\/(?:256|512)\/\d+\/[^/]+\/[^/]+\/(.+)$/);
+
+  if (!match) {
+    return null;
+  }
+
+  return `${match[1]}/512/{z}/{x}/{y}/${match[2]}`;
 }
 
 function getSourceStatus(source) {
@@ -423,15 +676,6 @@ function buildSourceMeta(source, status) {
   }
 
   return "Aucune donnée récente.";
-}
-
-function renderSettings(settings) {
-  els.settingsForm.rainThresholdMm.value = settings.rainThresholdMm;
-  els.settingsForm.rainAlertMinutes.value = settings.rainAlertMinutes;
-  els.settingsForm.minConfidence.value = settings.minConfidence;
-  els.settingsForm.quietMinutes.value = settings.quietMinutes;
-  els.settingsForm.enableRainAlerts.checked = settings.enableRainAlerts;
-  els.settingsForm.enableNtfy.checked = settings.enableNtfy;
 }
 
 function isNoSignificantRain(rain) {
@@ -467,12 +711,28 @@ function setLoading(isLoading) {
   }
 }
 
+function updateRefreshCountdown() {
+  if (state.isLoading) {
+    return;
+  }
+
+  if (!state.nextRefreshAt) {
+    els.refreshStatus.textContent = "Mise à jour automatique.";
+    return;
+  }
+
+  const remainingMs = Math.max(0, state.nextRefreshAt - Date.now());
+  const remainingSeconds = Math.ceil(remainingMs / 1000);
+  els.refreshStatus.textContent = `Prochaine mise à jour dans ${formatCountdown(remainingSeconds)}.`;
+}
+
 function formatValue(value, unit) {
   if (!Number.isFinite(value)) {
     return "—";
   }
 
-  return `${Math.round(value * 10) / 10} ${unit}`;
+  const suffix = unit ? ` ${unit}` : "";
+  return `${Math.round(value * 10) / 10}${suffix}`;
 }
 
 function formatDate(value) {
@@ -505,6 +765,16 @@ function formatDuration(minutes) {
   }
 
   return `${minutes} min`;
+}
+
+function formatCountdown(seconds) {
+  if (seconds >= 60) {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return remainingSeconds ? `${minutes} min ${remainingSeconds} s` : `${minutes} min`;
+  }
+
+  return `${seconds} s`;
 }
 
 function formatCoord(value) {

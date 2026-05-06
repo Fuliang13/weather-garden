@@ -1,4 +1,5 @@
 const ECOWITT_DEFAULT_API_BASE = "https://api.ecowitt.net/api/v3";
+const DEFAULT_STALE_MINUTES = 20;
 
 export async function fetchEcowittObservation({ env }) {
   const applicationKey = env.ECOWITT_APPLICATION_KEY;
@@ -11,7 +12,11 @@ export async function fetchEcowittObservation({ env }) {
       enabled: false,
       source: "ecowitt",
       fetchedAt: new Date().toISOString(),
-      message: "ECOWITT_APPLICATION_KEY, ECOWITT_API_KEY or ECOWITT_DEVICE_MAC is not configured yet."
+      message: "ECOWITT_APPLICATION_KEY, ECOWITT_API_KEY or ECOWITT_DEVICE_MAC is not configured yet.",
+      diagnostics: {
+        configured: false,
+        requiredSecrets: ["ECOWITT_APPLICATION_KEY", "ECOWITT_API_KEY", "ECOWITT_DEVICE_MAC"]
+      }
     };
   }
 
@@ -35,46 +40,61 @@ export async function fetchEcowittObservation({ env }) {
   const data = await response.json();
   return normalizeEcowittPayload(data, {
     label: env.ECOWITT_STATION_LABEL || "Station locale",
-    url: url.toString()
+    staleMinutes: Number(env.ECOWITT_STALE_MINUTES || DEFAULT_STALE_MINUTES)
   });
 }
 
-function normalizeEcowittPayload(payload, { label, url }) {
+export function normalizeEcowittPayload(payload, { label = "Station locale", staleMinutes = DEFAULT_STALE_MINUTES } = {}) {
+  const fetchedAt = new Date().toISOString();
+
   if (isEcowittError(payload)) {
     return {
       ok: false,
       enabled: true,
       source: "ecowitt",
       label,
-      fetchedAt: new Date().toISOString(),
+      fetchedAt,
       updatedAt: null,
       current: null,
+      stale: true,
       message: payload.msg || payload.message || `Ecowitt API returned code ${payload.code}.`,
-      url
+      diagnostics: {
+        configured: true,
+        apiCode: payload.code ?? null,
+        sensorCount: 0,
+        missingCoreSensors: ["outdoor.temperature", "outdoor.humidity", "rainfall.rain_rate", "wind.wind_speed"]
+      }
     };
   }
 
   const data = payload?.data || {};
   const current = normalizeCurrentObservation(data);
-  const updatedAt = latestIsoDate([
-    readSensorTime(data, "outdoor.temperature"),
-    readSensorTime(data, "outdoor.humidity"),
-    readSensorTime(data, "rainfall.rain_rate"),
-    readSensorTime(data, "wind.wind_speed"),
-    readSensorTime(data, "pressure.relative"),
-    readSensorTime(data, "solar_and_uvi.solar")
-  ]);
+  const sensorDiagnostics = collectSensorDiagnostics(data);
+  const updatedAt = latestIsoDate(sensorDiagnostics.map((sensor) => sensor.time));
+  const ageMinutes = updatedAt ? Math.round((Date.now() - Date.parse(updatedAt)) / 60_000) : null;
+  const stale = !Number.isFinite(ageMinutes) || ageMinutes > staleMinutes;
+  const missingCoreSensors = getMissingCoreSensors(data);
 
   return {
     ok: !!current,
     enabled: true,
     source: "ecowitt",
     label,
-    fetchedAt: new Date().toISOString(),
+    fetchedAt,
     updatedAt,
+    ageMinutes,
+    stale,
     current,
-    message: current ? null : "Ecowitt response received, but no normalized current observation was found.",
-    url,
+    message: buildEcowittMessage({ current, stale, ageMinutes, missingCoreSensors }),
+    diagnostics: {
+      configured: true,
+      staleMinutes,
+      sensorCount: sensorDiagnostics.length,
+      missingCoreSensors,
+      batterySensors: sensorDiagnostics.filter((sensor) => sensor.path.toLowerCase().includes("battery")),
+      signalSensors: sensorDiagnostics.filter((sensor) => sensor.path.toLowerCase().includes("signal")),
+      availableSensors: sensorDiagnostics.map((sensor) => sensor.path)
+    },
     raw: payload
   };
 }
@@ -101,6 +121,52 @@ function normalizeCurrentObservation(data) {
   };
 
   return Object.values(current).some((value) => Number.isFinite(value)) ? current : null;
+}
+
+function buildEcowittMessage({ current, stale, ageMinutes, missingCoreSensors }) {
+  if (!current) {
+    return "Ecowitt response received, but no normalized current observation was found.";
+  }
+
+  if (stale) {
+    return Number.isFinite(ageMinutes) ? `Ecowitt data is stale: ${ageMinutes} minutes old.` : "Ecowitt data has no usable timestamp.";
+  }
+
+  if (missingCoreSensors.length) {
+    return `Ecowitt OK, but missing core sensors: ${missingCoreSensors.join(", ")}.`;
+  }
+
+  return null;
+}
+
+function getMissingCoreSensors(data) {
+  return ["outdoor.temperature", "outdoor.humidity", "rainfall.rain_rate", "wind.wind_speed"]
+    .filter((path) => !Number.isFinite(coerceNumber(readSensorValue(data, path))));
+}
+
+function collectSensorDiagnostics(data, prefix = "") {
+  if (!data || typeof data !== "object") {
+    return [];
+  }
+
+  return Object.entries(data).flatMap(([key, value]) => {
+    const path = prefix ? `${prefix}.${key}` : key;
+
+    if (value && typeof value === "object" && "value" in value) {
+      return [{
+        path,
+        value: value.value ?? null,
+        unit: value.unit ?? null,
+        time: value.time ?? null
+      }];
+    }
+
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return collectSensorDiagnostics(value, path);
+    }
+
+    return [];
+  });
 }
 
 function isEcowittError(payload) {
@@ -211,10 +277,6 @@ function readSolarWm2(data, path) {
 
 function readSensorValue(data, path) {
   return readPath(data, path)?.value;
-}
-
-function readSensorTime(data, path) {
-  return readPath(data, path)?.time;
 }
 
 function readPath(data, path) {

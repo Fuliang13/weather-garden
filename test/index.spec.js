@@ -5,21 +5,37 @@ import {
 	SELF,
 } from "cloudflare:test";
 import { describe, it, expect } from "vitest";
-import worker from "../src";
+import worker from "../src/worker.js";
 
-describe("Hello World worker", () => {
-	it("responds with Hello World! (unit style)", async () => {
-		const request = new Request("http://example.com");
-		// Create an empty context to pass to `worker.fetch()`.
+describe("Weather Garden worker", () => {
+	it("returns public settings without private ntfy topic", async () => {
+		const request = new Request("http://example.com/api/settings");
 		const ctx = createExecutionContext();
 		const response = await worker.fetch(request, env, ctx);
-		// Wait for all `Promise`s passed to `ctx.waitUntil()` to settle before running test assertions
 		await waitOnExecutionContext(ctx);
-		expect(await response.text()).toMatchInlineSnapshot(`"Hello World!"`);
+		const body = await response.json();
+
+		expect(response.ok).toBe(true);
+		expect(body.rainThresholdMm).toBeGreaterThan(0);
+		expect(body).not.toHaveProperty("ntfyTopic");
 	});
 
-	it("responds with Hello World! (integration style)", async () => {
-		const response = await SELF.fetch("http://example.com");
-		expect(await response.text()).toMatchInlineSnapshot(`"Hello World!"`);
+	it("returns the default garden state without calling weather providers", async () => {
+		const request = new Request("http://example.com/api/garden");
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		const body = await response.json();
+
+		expect(response.ok).toBe(true);
+		expect(body.entities.some((entity) => entity.id === "vigne" && entity.type === "vine")).toBe(true);
+	});
+
+	it("returns public settings in integration mode", async () => {
+		const response = await SELF.fetch("http://example.com/api/settings");
+		const body = await response.json();
+
+		expect(response.ok).toBe(true);
+		expect(typeof body.enableRainAlerts).toBe("boolean");
 	});
 });

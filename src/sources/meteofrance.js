@@ -1,8 +1,8 @@
 const RAINVIEWER_URL = "https://api.rainviewer.com/public/weather-maps.json";
+const METEOFRANCE_TOKEN_URL = "https://portail-api.meteofrance.fr/token";
 
 export async function fetchMeteoFranceRadar({ env }) {
   const apiUrl = env.METEOFRANCE_RADAR_API_URL;
-  const token = env.METEOFRANCE_API_TOKEN;
 
   if (!apiUrl) {
     return {
@@ -14,31 +14,37 @@ export async function fetchMeteoFranceRadar({ env }) {
     };
   }
 
-  const headers = {
-    "accept": "application/json"
-  };
-
-  if (token) {
-    headers.authorization = `Bearer ${token}`;
-  }
-
+  const headers = await buildMeteoFranceHeaders(env);
   const response = await fetch(apiUrl, { headers });
 
   if (!response.ok) {
     throw new Error(`Météo-France radar HTTP ${response.status}`);
   }
 
+  const contentType = response.headers.get("content-type") || "";
+
+  if (!contentType.toLowerCase().includes("json")) {
+    return {
+      ok: false,
+      enabled: true,
+      source: "meteofrance-radar",
+      fetchedAt: new Date().toISOString(),
+      message: `Météo-France radar returned ${contentType || "a non-JSON payload"}; configure a JSON endpoint or add a parser before scoring.`
+    };
+  }
+
   const data = await response.json();
   const score = coerceRadarScore(data);
 
   return {
-    ok: true,
+    ok: score !== null,
     enabled: true,
     source: "meteofrance-radar",
     fetchedAt: new Date().toISOString(),
     score,
     precipitationMm: coerceNumber(data.precipitationMm, data.precipitation, data.rainRate, data.rain_rate),
     probability: coerceNumber(data.probability, data.rainProbability, data.prob) ?? score,
+    message: score === null ? "Météo-France radar JSON received, but no usable rain score was found." : null,
     raw: data
   };
 }
@@ -85,6 +91,52 @@ export async function fetchRainViewerRadar({ latitude, longitude, enabled = true
     tileUrlTemplate,
     frames: frames.slice(-6)
   };
+}
+
+async function buildMeteoFranceHeaders(env) {
+  const headers = {
+    "accept": "application/json"
+  };
+
+  if (env.METEOFRANCE_APPLICATION_ID) {
+    headers.authorization = `Bearer ${await fetchMeteoFranceOAuthToken(env.METEOFRANCE_APPLICATION_ID)}`;
+    return headers;
+  }
+
+  if (env.METEOFRANCE_API_KEY) {
+    headers.apikey = env.METEOFRANCE_API_KEY;
+    return headers;
+  }
+
+  if (env.METEOFRANCE_API_TOKEN) {
+    headers.authorization = `Bearer ${env.METEOFRANCE_API_TOKEN}`;
+  }
+
+  return headers;
+}
+
+async function fetchMeteoFranceOAuthToken(applicationId) {
+  const response = await fetch(METEOFRANCE_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "authorization": `Basic ${applicationId}`,
+      "content-type": "application/x-www-form-urlencoded"
+    },
+    body: "grant_type=client_credentials"
+  });
+
+  if (!response.ok) {
+    throw new Error(`Météo-France token HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  const token = data.access_token || data.token;
+
+  if (!token) {
+    throw new Error("Météo-France token response did not contain an access token.");
+  }
+
+  return token;
 }
 
 function coerceRadarScore(data) {

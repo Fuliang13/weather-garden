@@ -6,8 +6,9 @@ export async function fetchOpenMeteoArome({ latitude, longitude, timezone }) {
   url.searchParams.set("longitude", longitude);
   url.searchParams.set("timezone", timezone || "Europe/Paris");
   url.searchParams.set("timeformat", "unixtime");
-  url.searchParams.set("forecast_hours", "6");
-  url.searchParams.set("forecast_minutely_15", "12");
+  url.searchParams.set("forecast_hours", "72");
+  url.searchParams.set("forecast_days", "3");
+  url.searchParams.set("forecast_minutely_15", "48");
   url.searchParams.set("current", [
     "temperature_2m",
     "relative_humidity_2m",
@@ -36,6 +37,14 @@ export async function fetchOpenMeteoArome({ latitude, longitude, timezone }) {
     "wind_gusts_10m",
     "weather_code"
   ].join(","));
+  url.searchParams.set("daily", [
+    "temperature_2m_min",
+    "temperature_2m_max",
+    "precipitation_sum",
+    "rain_sum",
+    "wind_speed_10m_max",
+    "wind_gusts_10m_max"
+  ].join(","));
 
   const response = await fetch(url.toString(), {
     headers: {
@@ -57,6 +66,7 @@ export async function fetchOpenMeteoArome({ latitude, longitude, timezone }) {
     current: normalizeCurrent(data.current, data.utc_offset_seconds),
     hourly: normalizeRows(data.hourly, data.utc_offset_seconds),
     minutely15: normalizeRows(data.minutely_15, data.utc_offset_seconds),
+    daily: normalizeRows(data.daily, data.utc_offset_seconds),
     rawGenerationTimeMs: data.generationtime_ms ?? null
   };
 }
