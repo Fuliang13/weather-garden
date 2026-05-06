@@ -1,0 +1,5 @@
+# Optional Ecowitt adapter.
+# Keep this disabled until the actual Ecowitt Cloud payload or a normalized proxy endpoint is confirmed.
+ECOWITT_API_URL=
+ECOWITT_API_TOKEN=
+ECOWITT_STATION_LABEL=Station locale

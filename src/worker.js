@@ -1,12 +1,15 @@
 import { fetchOpenMeteoArome } from "./sources/openMeteo.js";
 import { fetchMetNorway } from "./sources/metNorway.js";
 import { fetchMeteoFranceRadar, fetchRainViewerRadar } from "./sources/meteofrance.js";
+import { fetchEcowittObservation } from "./sources/ecowitt.js";
 import { DEFAULT_LOCATION, DEFAULT_SETTINGS, buildWeatherStatus, mergeSettings } from "./scoring.js";
+import { buildGardenStatus, normalizeGardenState } from "./garden.js";
 
 const KV_KEYS = {
   settings: "settings",
   latestStatus: "latest_status",
-  lastRainAlert: "last_alert_rain"
+  lastRainAlert: "last_alert_rain",
+  gardenState: "garden_state"
 };
 
 export default {
@@ -33,6 +36,18 @@ export default {
         await env.WEATHER_KV.put(KV_KEYS.settings, JSON.stringify(settings));
         ctx.waitUntil(computeAndStoreStatus(env));
         return json(settings);
+      }
+
+      if (url.pathname === "/api/garden" && request.method === "GET") {
+        return json(await loadGardenState(env));
+      }
+
+      if (url.pathname === "/api/garden" && request.method === "POST") {
+        const body = await request.json();
+        const gardenState = normalizeGardenState(body);
+        await env.WEATHER_KV.put(KV_KEYS.gardenState, JSON.stringify(gardenState));
+        ctx.waitUntil(computeAndStoreStatus(env));
+        return json(gardenState);
       }
 
       if (url.pathname === "/api/alerts/test" && request.method === "POST") {
@@ -80,9 +95,10 @@ async function getLatestStatus(env) {
 async function computeAndStoreStatus(env) {
   const settings = await loadSettings(env);
   const location = loadLocation(env);
+  const gardenState = await loadGardenState(env);
   const errors = [];
 
-  const [openMeteo, metNorway, meteoFranceRadar, rainViewer] = await Promise.all([
+  const [openMeteo, metNorway, meteoFranceRadar, rainViewer, ecowittObservation] = await Promise.all([
     settleSource("open-meteo-arome", () => fetchOpenMeteoArome(location), errors),
     settleSource("met-norway", () => fetchMetNorway({
       ...location,
@@ -92,7 +108,8 @@ async function computeAndStoreStatus(env) {
     settleSource("rainviewer", () => fetchRainViewerRadar({
       ...location,
       enabled: settings.rainViewerEnabled
-    }), errors)
+    }), errors),
+    settleSource("ecowitt", () => fetchEcowittObservation({ env }), errors)
   ]);
 
   const status = buildWeatherStatus({
@@ -102,6 +119,8 @@ async function computeAndStoreStatus(env) {
     metNorway,
     meteoFranceRadar,
     rainViewer,
+    ecowittObservation,
+    garden: buildGardenStatus(gardenState),
     errors
   });
 
@@ -131,6 +150,11 @@ async function loadSettings(env) {
     ...envDefaults,
     ...(stored || {})
   });
+}
+
+async function loadGardenState(env) {
+  const stored = await env.WEATHER_KV.get(KV_KEYS.gardenState, "json");
+  return normalizeGardenState(stored || {});
 }
 
 function sanitizePublicSettings(settings = {}) {

@@ -15,10 +15,10 @@
         <h1>Weather Garden</h1>
         <p id="location" class="muted">Chargement…</p>
       </div>
-      <button id="refreshButton" type="button">Actualiser</button>
+      <p id="refreshStatus" class="refresh-status muted">Mise à jour automatique.</p>
     </header>
 
-    <section id="alertCard" class="card alert-card">
+    <section id="alertCard" class="card alert-card dashboard-block dashboard-block-rain">
       <h2>Pluie</h2>
       <p id="rainSummary" class="summary">Calcul en cours…</p>
       <p id="rainEta" class="muted"></p>
@@ -27,8 +27,20 @@
     </section>
 
     <section class="grid">
-      <article class="card">
-        <h2>Maintenant</h2>
+      <article id="stationCard" class="card dashboard-block dashboard-block-station" hidden>
+        <h2>Observation station</h2>
+        <p id="stationSource" class="card-note muted">Station météo</p>
+        <dl class="metrics">
+          <div><dt>Température</dt><dd id="stationTemperature">—</dd></div>
+          <div><dt>Humidité</dt><dd id="stationHumidity">—</dd></div>
+          <div><dt>Vent</dt><dd id="stationWind">—</dd></div>
+          <div><dt>Rafales</dt><dd id="stationGust">—</dd></div>
+        </dl>
+      </article>
+
+      <article class="card dashboard-block dashboard-block-forecast">
+        <h2>Prévision immédiate</h2>
+        <p id="currentSource" class="card-note muted">Modèle météo</p>
         <dl class="metrics">
           <div><dt>Température</dt><dd id="temperature">—</dd></div>
           <div><dt>Humidité</dt><dd id="humidity">—</dd></div>
@@ -37,24 +49,34 @@
         </dl>
       </article>
 
-      <article class="card">
+      <article class="card dashboard-block dashboard-block-rain-horizons">
         <h2>Horizons</h2>
         <div id="horizons" class="horizons"></div>
       </article>
     </section>
 
-    <section id="gardenCard" class="card garden-card" hidden>
+    <section id="gardenCard" class="card garden-card dashboard-block dashboard-block-garden" hidden>
       <div class="section-header">
         <div>
           <h2>Mode jardin</h2>
           <p id="gardenSummary" class="garden-summary">Calcul en cours…</p>
         </div>
-        <span class="garden-badge">Potager</span>
+        <span id="gardenBadge" class="garden-badge"></span>
       </div>
       <ul id="gardenDetails" class="garden-details"></ul>
     </section>
 
-    <section class="card radar-card">
+    <section id="gardenAlertsCard" class="card garden-alerts-card dashboard-block dashboard-block-garden-alerts" hidden>
+      <div class="section-header">
+        <div>
+          <h2 id="gardenAlertsTitle"></h2>
+          <p id="gardenAlertsSummary" class="garden-summary">—</p>
+        </div>
+      </div>
+      <ul id="gardenAlertsList" class="garden-details"></ul>
+    </section>
+
+    <section class="card radar-card dashboard-block dashboard-block-radar">
       <div class="section-header">
         <div>
           <h2>Radar</h2>

@@ -8,6 +8,7 @@ Mini app météo-jardin personnelle pour Louvigné-du-Désert.
 - MET Norway Locationforecast : confirmation indépendante.
 - Météo-France radar : module prêt à brancher via `METEOFRANCE_RADAR_API_URL` + `METEOFRANCE_API_TOKEN`.
 - RainViewer : fallback visuel radar, activé par défaut.
+- Ecowitt : structure prête pour station locale via `ECOWITT_API_URL` après validation du format réellement utilisé.
 - ntfy : notifications gratuites, optionnelles.
 
 ## Installation
@@ -83,3 +84,20 @@ npx wrangler secret put METEOFRANCE_RADAR_API_URL
 ```
 
 Le module accepte actuellement un endpoint JSON déjà exploitable. Si l'API renvoie un format brut radar, il faudra ajouter un petit parseur ou un endpoint de prétraitement.
+
+## Ecowitt
+
+Le module Ecowitt est préparé mais reste désactivé tant que `ECOWITT_API_URL` n'est pas configuré.
+
+Il attend pour l'instant un endpoint JSON normalisé ou vérifié avant branchement réel sur Ecowitt Cloud. Configure ensuite :
+
+```bash
+npx wrangler secret put ECOWITT_API_URL
+npx wrangler secret put ECOWITT_API_TOKEN
+```
+
+Optionnel :
+
+```bash
+ECOWITT_STATION_LABEL="Station locale"
+```

@@ -10,6 +10,7 @@
 		"APP_LONGITUDE": "-1.1030777777777777",
 		"APP_TIMEZONE": "Europe/Paris",
 		"METNO_USER_AGENT": "weather-garden/0.1 contact@example.com",
+		"ECOWITT_STATION_LABEL": "Station locale",
 		"NTFY_SERVER": "https://ntfy.sh",
 		"ENABLE_NTFY": "true"
 	},

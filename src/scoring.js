@@ -53,6 +53,8 @@ export function buildWeatherStatus({
   metNorway,
   meteoFranceRadar,
   rainViewer,
+  ecowittObservation,
+  garden,
   errors = [],
   now = new Date()
 }) {
@@ -92,9 +94,16 @@ export function buildWeatherStatus({
     updatedAt: now.toISOString(),
     settings: safeSettings,
     current,
+    stationObservation: ecowittObservation?.ok ? ecowittObservation : null,
+    observation: {
+      station: ecowittObservation?.ok ? ecowittObservation : null
+    },
+    garden: garden || null,
     rain: {
       etaMinutes: rainSignal.etaMinutes,
       activeNow: rainSignal.activeNow,
+      noSignificantRain: rainSignal.noSignificantRain,
+      noRainWindowMinutes: rainSignal.noRainWindowMinutes,
       intensityLevel: rainSignal.intensityLevel,
       intensityLabel: rainSignal.intensityLabel,
       intensityMmPerHour: rainSignal.intensityMmPerHour,
@@ -113,7 +122,7 @@ export function buildWeatherStatus({
       meteoFrance: meteoFranceRadar || null,
       rainViewer: rainViewer || null
     },
-    sources: buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer, errors),
+    sources: buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer, ecowittObservation, errors),
     errors
   };
 }
@@ -153,6 +162,10 @@ function buildHorizonResult({ minutes, settings, openMeteo, metNorway, meteoFran
 function buildCurrentConditions(openMeteo, metNorway) {
   const current = openMeteo?.current || {};
   const metCurrent = metNorway?.timeseries?.[0]?.instant || {};
+  const sourceLabels = [
+    openMeteo?.ok ? "Open-Meteo AROME" : null,
+    metNorway?.ok ? "MET Norway" : null
+  ].filter(Boolean);
 
   return {
     temperatureC: pickNumber(current.temperature_2m, metCurrent.air_temperature),
@@ -160,7 +173,8 @@ function buildCurrentConditions(openMeteo, metNorway) {
     windKmh: pickNumber(current.wind_speed_10m, metCurrent.wind_speed_kmh),
     gustKmh: pickNumber(current.wind_gusts_10m, metCurrent.wind_gusts_kmh),
     precipitationMm: pickNumber(current.precipitation, current.rain, 0),
-    weatherCode: current.weather_code ?? null
+    weatherCode: current.weather_code ?? null,
+    sourceLabel: sourceLabels.length ? `Prévision immédiate · ${sourceLabels.join(" / ")}` : "Prévision immédiate"
   };
 }
 
@@ -176,9 +190,12 @@ function buildRainSignal({ current, openMeteo, alertHorizon, horizonResults, set
     : estimateFutureRainDurationMinutes(minutelyRows, nowMs, settings.rainThresholdMm, etaMinutes);
   const intensityMmPerHour = activeNow ? currentIntensityMmPerHour : forecastIntensityMmPerHour;
   const intensityLevel = getIntensityLevel(intensityMmPerHour);
+  const noSignificantRain = !activeNow && etaMinutes === null && horizonResults.every((item) => item.alertLevel === "none" && (item.precipitationMm || 0) < settings.rainThresholdMm);
 
   return {
     activeNow,
+    noSignificantRain,
+    noRainWindowMinutes: noSignificantRain ? estimateNoRainWindowMinutes(openMeteo, nowMs, settings.rainThresholdMm) : null,
     etaMinutes,
     expectedDurationMinutes,
     intensityMmPerHour: round(intensityMmPerHour, 2),
@@ -189,11 +206,12 @@ function buildRainSignal({ current, openMeteo, alertHorizon, horizonResults, set
 
 function buildRainHeadline(rainSignal, alertLevel) {
   if (rainSignal.activeNow) {
-    if (rainSignal.expectedDurationMinutes) {
-      return `${rainSignal.intensityLabel} pendant au moins ${formatDuration(rainSignal.expectedDurationMinutes)}`;
-    }
+    const label = rainSignal.intensityLevel === "none" ? "Pluie" : rainSignal.intensityLabel;
+    return `${label} en cours`;
+  }
 
-    return `${rainSignal.intensityLabel} en cours`;
+  if (rainSignal.noSignificantRain) {
+    return buildNoRainHeadline(rainSignal.noRainWindowMinutes);
   }
 
   if (rainSignal.etaMinutes !== null && alertLevel !== "none") {
@@ -215,7 +233,11 @@ function buildRainDetail(rainSignal, alertHorizon) {
   const precipitation = alertHorizon.precipitationMm === null ? "—" : `${alertHorizon.precipitationMm} mm`;
 
   if (rainSignal.activeNow) {
-    return `${capitalize(risk)} de poursuite sur ${alertHorizon.minutes} min · intensité estimée ${intensity} · cumul prévu ${precipitation}.`;
+    return `Intensité estimée ${intensity} · cumul prévu ${precipitation} sur ${alertHorizon.minutes} min.`;
+  }
+
+  if (rainSignal.noSignificantRain) {
+    return "";
   }
 
   if (rainSignal.etaMinutes !== null) {
@@ -286,7 +308,7 @@ function shouldSendRainAlert(settings, rainSignal, alertLevel) {
   return rainSignal.activeNow || ["moderate", "high"].includes(alertLevel);
 }
 
-function buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer, errors) {
+function buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer, ecowittObservation, errors) {
   return [
     {
       id: "open-meteo-arome",
@@ -314,6 +336,14 @@ function buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer
       ok: !!rainViewer?.ok,
       updatedAt: rainViewer?.fetchedAt || null,
       imageUrl: rainViewer?.imageUrl || null
+    },
+    {
+      id: "ecowitt",
+      label: ecowittObservation?.label || "Ecowitt",
+      ok: !!ecowittObservation?.ok,
+      enabled: ecowittObservation ? !!ecowittObservation.enabled : undefined,
+      updatedAt: ecowittObservation?.updatedAt || ecowittObservation?.fetchedAt || null,
+      message: ecowittObservation?.message || null
     }
   ].map((source) => ({
     ...source,
@@ -402,6 +432,25 @@ function estimateFutureRainDurationMinutes(rows, nowMs, thresholdMm, etaMinutes)
   }
 
   return estimateContiguousRainDuration(rows, nowMs + etaMinutes * 60_000, thresholdMm);
+}
+
+function estimateNoRainWindowMinutes(openMeteo, nowMs, thresholdMm) {
+  const rows = [...(openMeteo?.minutely15 || []), ...(openMeteo?.hourly || [])]
+    .filter((row) => typeof row.timeMs === "number" && row.timeMs >= nowMs - 5 * 60_000)
+    .sort((a, b) => a.timeMs - b.timeMs);
+
+  if (!rows.length) {
+    return null;
+  }
+
+  const firstRain = rows.find((row) => (row.precipitation ?? row.rain ?? 0) >= thresholdMm);
+  const lastDryRow = firstRain ? rows[Math.max(0, rows.indexOf(firstRain) - 1)] : rows[rows.length - 1];
+
+  if (!lastDryRow) {
+    return null;
+  }
+
+  return Math.max(0, Math.round((lastDryRow.timeMs - nowMs) / 60_000));
 }
 
 function estimateContiguousRainDuration(rows, startMs, thresholdMm) {
@@ -510,10 +559,39 @@ function isInFutureWindow(timeMs, nowMs, endMs) {
 }
 
 function formatDuration(minutes) {
+  if (minutes >= 1440) {
+    const days = Math.floor(minutes / 1440);
+    const remainingHours = Math.floor((minutes % 1440) / 60);
+    const dayText = `${days} jour${days > 1 ? "s" : ""}`;
+    return remainingHours ? `${dayText} ${remainingHours} h` : dayText;
+  }
+
   if (minutes >= 60) {
     const hours = Math.floor(minutes / 60);
     const remainingMinutes = minutes % 60;
     return remainingMinutes ? `${hours} h ${remainingMinutes} min` : `${hours} h`;
+  }
+
+  return `${minutes} min`;
+}
+
+function buildNoRainHeadline(minutes) {
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    return "Pas de pluie significative";
+  }
+
+  return `Pas de pluie significative pendant ${formatDryWindow(minutes)}`;
+}
+
+function formatDryWindow(minutes) {
+  if (minutes >= 1440) {
+    const days = Math.floor(minutes / 1440);
+    return `${days} jour${days > 1 ? "s" : ""}`;
+  }
+
+  if (minutes >= 60) {
+    const hours = Math.max(1, Math.floor(minutes / 60));
+    return `${hours} heure${hours > 1 ? "s" : ""}`;
   }
 
   return `${minutes} min`;
