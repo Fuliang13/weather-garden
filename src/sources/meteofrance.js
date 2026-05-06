@@ -42,12 +42,23 @@ export async function debugMeteoFranceRadar({ env }) {
 
   if (authMode === "api-key") {
     try {
-      const fetchJson = (url) => fetchMeteoFranceJsonWithApiKey(env, url);
-      const fetchBinary = (url) => fetchMeteoFranceBinaryWithApiKey(env, url);
-      const radarMetadata = await fetchMeteoFranceRadarMetadata(fetchJson);
-      const radar = await buildMeteoFranceRadarResponse({ env, fetchedAt, authMode, radarMetadata, fetchBinary, forceHdf5Refresh: true });
+      const catalog = await fetchMeteoFranceJsonWithApiKey(env, METEOFRANCE_RADAR_CATALOG_URL);
 
-      return addDebugCatalogDiagnostics(radar, null, true);
+      return {
+        ok: true,
+        enabled: true,
+        source: "meteofrance-radar",
+        fetchedAt,
+        message: "Météo-France API key and radar catalog OK.",
+        diagnostics: {
+          configured: true,
+          authMode,
+          tokenOk: null,
+          catalogOk: true,
+          catalogEndpoint: METEOFRANCE_RADAR_CATALOG_URL,
+          catalogLinkCount: collectUrls(catalog).length
+        }
+      };
     } catch (error) {
       return buildMeteoFranceDebugErrorResponse({ fetchedAt, authMode, tokenOk: null, message: error.message });
     }
@@ -62,40 +73,68 @@ export async function debugMeteoFranceRadar({ env }) {
   }
 
   try {
-    const fetchJson = (url) => fetchMeteoFranceJsonWithOAuth(env, url, tokenState);
-    const fetchBinary = (url) => fetchMeteoFranceBinaryWithOAuth(env, url, tokenState);
-    const radarMetadata = await fetchMeteoFranceRadarMetadata(fetchJson);
-    const radar = await buildMeteoFranceRadarResponse({ env, fetchedAt, authMode, radarMetadata, fetchBinary, forceHdf5Refresh: true });
+    const catalog = await fetchMeteoFranceJsonWithOAuth(env, METEOFRANCE_RADAR_CATALOG_URL, tokenState);
 
-    return addDebugCatalogDiagnostics(radar, true, true);
+    return {
+      ok: true,
+      enabled: true,
+      source: "meteofrance-radar",
+      fetchedAt,
+      message: "Météo-France token and radar catalog OK.",
+      diagnostics: {
+        configured: true,
+        authMode,
+        tokenOk: true,
+        catalogOk: true,
+        catalogEndpoint: METEOFRANCE_RADAR_CATALOG_URL,
+        catalogLinkCount: collectUrls(catalog).length,
+        userAgentSent: !!getMeteoFranceUserAgent(env)
+      }
+    };
   } catch (error) {
     return buildMeteoFranceDebugErrorResponse({ fetchedAt, authMode, tokenOk: true, message: error.message, env });
   }
 }
 
 export async function debugMeteoFranceHdf5({ env }) {
-  const debug = await debugMeteoFranceRadar({ env });
+  const fetchedAt = new Date().toISOString();
+  const authMode = getMeteoFranceAuthMode(env);
 
-  return {
-    ok: !!debug.diagnostics?.hdf5?.signatureOk,
-    enabled: debug.enabled,
-    source: "meteofrance-radar-hdf5",
-    fetchedAt: debug.fetchedAt,
-    message: debug.diagnostics?.fallbackReason || debug.message,
-    diagnostics: {
-      configured: debug.diagnostics?.configured ?? false,
-      authMode: debug.diagnostics?.authMode ?? null,
-      product500Found: debug.diagnostics?.product500Found ?? false,
-      product1000Found: debug.diagnostics?.product1000Found ?? false,
-      productUrl: debug.productUrl || null,
-      fallbackProductUrl: debug.fallbackProductUrl || null,
-      hdf5: debug.diagnostics?.hdf5 || null,
-      nativeLayerAvailable: !!debug.nativeLayer?.ok,
-      nativeLayerReason: debug.nativeLayer?.reason || null,
-      frameLimit: METEOFRANCE_RADAR_FRAME_LIMIT,
-      frameCount: debug.frames?.length || 0
+  if (!authMode) {
+    return buildMeteoFranceHdf5DebugPayload(buildMeteoFranceMissingConfigResponse(fetchedAt, true));
+  }
+
+  if (authMode === "api-key") {
+    try {
+      const fetchJson = (url) => fetchMeteoFranceJsonWithApiKey(env, url);
+      const fetchBinary = (url) => fetchMeteoFranceBinaryWithApiKey(env, url);
+      const radarMetadata = await fetchMeteoFranceRadarMetadata(fetchJson);
+      const radar = await buildMeteoFranceRadarResponse({ env, fetchedAt, authMode, radarMetadata, fetchBinary, forceHdf5Refresh: true });
+
+      return buildMeteoFranceHdf5DebugPayload(addDebugCatalogDiagnostics(radar, null, true));
+    } catch (error) {
+      return buildMeteoFranceHdf5DebugPayload(buildMeteoFranceDebugErrorResponse({ fetchedAt, authMode, tokenOk: null, message: error.message }));
     }
-  };
+  }
+
+  const tokenState = {};
+
+  try {
+    tokenState.accessToken = await obtainMeteoFranceAccessToken(env);
+  } catch (error) {
+    return buildMeteoFranceHdf5DebugPayload(buildMeteoFranceDebugErrorResponse({ fetchedAt, authMode, tokenOk: false, message: error.message, env }));
+  }
+
+  try {
+    const fetchJson = (url) => fetchMeteoFranceJsonWithOAuth(env, url, tokenState);
+    const fetchBinary = (url) => fetchMeteoFranceBinaryWithOAuth(env, url, tokenState);
+    const radarMetadata = await fetchMeteoFranceRadarMetadata(fetchJson);
+    const radar = await buildMeteoFranceRadarResponse({ env, fetchedAt, authMode, radarMetadata, fetchBinary, forceHdf5Refresh: true });
+
+    return buildMeteoFranceHdf5DebugPayload(addDebugCatalogDiagnostics(radar, true, true));
+  } catch (error) {
+    return buildMeteoFranceHdf5DebugPayload(buildMeteoFranceDebugErrorResponse({ fetchedAt, authMode, tokenOk: true, message: error.message, env }));
+  }
 }
 
 export async function fetchRainViewerRadar({ latitude, longitude, enabled = true }) {
@@ -405,6 +444,31 @@ function buildMeteoFranceDebugErrorResponse({ fetchedAt, authMode, tokenOk, mess
       tokenEndpoint: authMode === "oauth2" ? METEOFRANCE_TOKEN_URL : undefined,
       catalogEndpoint: METEOFRANCE_RADAR_CATALOG_URL,
       userAgentSent: authMode === "oauth2" ? !!getMeteoFranceUserAgent(env || {}) : undefined
+    }
+  };
+}
+
+function buildMeteoFranceHdf5DebugPayload(debug) {
+  return {
+    ok: !!debug.diagnostics?.hdf5?.signatureOk,
+    enabled: debug.enabled,
+    source: "meteofrance-radar-hdf5",
+    fetchedAt: debug.fetchedAt,
+    message: debug.diagnostics?.fallbackReason || debug.message,
+    diagnostics: {
+      configured: debug.diagnostics?.configured ?? false,
+      authMode: debug.diagnostics?.authMode ?? null,
+      tokenOk: debug.diagnostics?.tokenOk ?? null,
+      catalogOk: debug.diagnostics?.catalogOk ?? false,
+      product500Found: debug.diagnostics?.product500Found ?? false,
+      product1000Found: debug.diagnostics?.product1000Found ?? false,
+      productUrl: debug.productUrl || null,
+      fallbackProductUrl: debug.fallbackProductUrl || null,
+      hdf5: debug.diagnostics?.hdf5 || null,
+      nativeLayerAvailable: !!debug.nativeLayer?.ok,
+      nativeLayerReason: debug.nativeLayer?.reason || null,
+      frameLimit: METEOFRANCE_RADAR_FRAME_LIMIT,
+      frameCount: debug.frames?.length || 0
     }
   };
 }

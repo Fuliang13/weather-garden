@@ -301,13 +301,9 @@ describe("Meteo-France radar source", () => {
     expect(JSON.stringify(radar)).not.toContain("secret-product-token");
   });
 
-  it("reports API key catalog and HDF5 diagnostics without exposing the secret", async () => {
+  it("reports API key catalog diagnostics without following suspended child endpoints", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(jsonResponse(catalogPayload))
-      .mockResolvedValueOnce(jsonResponse(zonePayload))
-      .mockResolvedValueOnce(jsonResponse(observationsPayload))
-      .mockResolvedValueOnce(jsonResponse(metadataPayload))
-      .mockResolvedValueOnce(binaryResponse(hdf5Signature));
+      .mockResolvedValueOnce(jsonResponse(catalogPayload));
 
     const debug = await debugMeteoFranceRadar({
       env: {
@@ -315,27 +311,25 @@ describe("Meteo-France radar source", () => {
       }
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques");
     expect(fetchMock.mock.calls[0][1].headers.authorization).toBe("Bearer api-key-token");
     expect(debug).toMatchObject({
       ok: true,
       enabled: true,
       source: "meteofrance-radar",
+      message: "Météo-France API key and radar catalog OK.",
       diagnostics: {
         configured: true,
         authMode: "api-key",
         tokenOk: null,
         catalogOk: true,
-        catalogEndpoint: "https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques",
-        product500Found: true,
-        hdf5: {
-          signatureOk: true
-        }
+        catalogEndpoint: "https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques"
       }
     });
+    expect(debug.diagnostics).not.toHaveProperty("hdf5");
+    expect(debug.diagnostics).not.toHaveProperty("product500Found");
     expect(JSON.stringify(debug)).not.toContain("api-key-token");
-    expect(JSON.stringify(debug)).not.toContain("secret-product-token");
   });
 
   it("reports focused HDF5 debug diagnostics without exposing secrets", async () => {
