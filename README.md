@@ -87,13 +87,14 @@ Le module accepte actuellement un endpoint JSON déjà exploitable. Si l'API ren
 
 ## Ecowitt
 
-Le module Ecowitt est préparé mais reste désactivé tant que `ECOWITT_API_URL` n'est pas configuré.
+Le module Ecowitt utilise l’API Cloud officielle `/api/v3/device/real_time`.
 
-Il attend pour l'instant un endpoint JSON normalisé ou vérifié avant branchement réel sur Ecowitt Cloud. Configure ensuite :
+Secrets obligatoires :
 
 ```bash
-npx wrangler secret put ECOWITT_API_URL
-npx wrangler secret put ECOWITT_API_TOKEN
+npx wrangler secret put ECOWITT_APPLICATION_KEY
+npx wrangler secret put ECOWITT_API_KEY
+npx wrangler secret put ECOWITT_DEVICE_MAC
 ```
 
 Optionnel :

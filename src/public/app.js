@@ -188,6 +188,14 @@ function renderStationObservation(station) {
   els.stationHumidity.textContent = formatValue(current.humidityPct, "%");
   els.stationWind.textContent = formatValue(current.windKmh, "km/h");
   els.stationGust.textContent = formatValue(current.gustKmh, "km/h");
+
+  if (current.rainRateMmPerHour !== null || current.dailyRainMm !== null) {
+    els.stationSource.textContent += ` · pluie ${formatValue(current.rainRateMmPerHour, "mm/h")} · jour ${formatValue(current.dailyRainMm, "mm")}`;
+  }
+
+  if (current.uvIndex !== null || current.solarWm2 !== null) {
+    els.stationSource.textContent += ` · UV ${formatValue(current.uvIndex, "")} · solaire ${formatValue(current.solarWm2, "W/m²")}`;
+  }
 }
 
 function renderCurrentForecast(current) {
