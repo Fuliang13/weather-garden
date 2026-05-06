@@ -82,7 +82,7 @@ export function buildWeatherStatus({
     settings: safeSettings,
     nowMs
   });
-  const garden = buildGardenAdvice({
+	const rainGardenAdvice = buildGardenAdvice({
     current,
     rainSignal,
     alertHorizon,
@@ -116,7 +116,7 @@ export function buildWeatherStatus({
       detail: buildRainDetail(rainSignal, alertHorizon),
       shouldAlert: shouldSendRainAlert(safeSettings, rainSignal, alertLevel),
       horizons: horizonResults,
-      garden
+			garden: rainGardenAdvice
     },
     radar: {
       meteoFrance: meteoFranceRadar || null,
