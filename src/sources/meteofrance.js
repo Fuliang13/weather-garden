@@ -1,51 +1,55 @@
 const RAINVIEWER_URL = "https://api.rainviewer.com/public/weather-maps.json";
 const METEOFRANCE_TOKEN_URL = "https://portail-api.meteofrance.fr/token";
+const METEOFRANCE_RADAR_ZONE = "METROPOLE";
+const METEOFRANCE_RADAR_OBSERVATION = "LAME_D_EAU";
+const METEOFRANCE_RADAR_METADATA_URL = `https://public-api.meteofrance.fr/public/DPRadar/mosaiques/${METEOFRANCE_RADAR_ZONE}/observations/${METEOFRANCE_RADAR_OBSERVATION}`;
 
 export async function fetchMeteoFranceRadar({ env }) {
-  const apiUrl = env.METEOFRANCE_RADAR_API_URL;
+  const fetchedAt = new Date().toISOString();
 
-  if (!apiUrl) {
+  if (!env.METEOFRANCE_APPLICATION_ID) {
     return {
       ok: false,
       enabled: false,
       source: "meteofrance-radar",
-      fetchedAt: new Date().toISOString(),
-      message: "METEOFRANCE_RADAR_API_URL is not configured yet."
+      fetchedAt,
+      message: "METEOFRANCE_APPLICATION_ID is not configured yet.",
+      diagnostics: {
+        configured: false,
+        requiredSecrets: ["METEOFRANCE_APPLICATION_ID"]
+      }
     };
   }
 
-  const headers = await buildMeteoFranceHeaders(env);
-  const response = await fetch(apiUrl, { headers });
-
-  if (!response.ok) {
-    throw new Error(`Météo-France radar HTTP ${response.status}`);
-  }
-
-  const contentType = response.headers.get("content-type") || "";
-
-  if (!contentType.toLowerCase().includes("json")) {
-    return {
-      ok: false,
-      enabled: true,
-      source: "meteofrance-radar",
-      fetchedAt: new Date().toISOString(),
-      message: `Météo-France radar returned ${contentType || "a non-JSON payload"}; configure a JSON endpoint or add a parser before scoring.`
-    };
-  }
-
-  const data = await response.json();
-  const score = coerceRadarScore(data);
+  const metadata = await fetchMeteoFranceJsonWithOAuth(env, METEOFRANCE_RADAR_METADATA_URL);
+  const productUrl = findMeteoFranceProductUrl(metadata, 1000);
+  const mesh500ProductUrl = findMeteoFranceProductUrl(metadata, 500);
 
   return {
-    ok: score !== null,
+    ok: !!productUrl,
     enabled: true,
     source: "meteofrance-radar",
-    fetchedAt: new Date().toISOString(),
-    score,
-    precipitationMm: coerceNumber(data.precipitationMm, data.precipitation, data.rainRate, data.rain_rate),
-    probability: coerceNumber(data.probability, data.rainProbability, data.prob) ?? score,
-    message: score === null ? "Météo-France radar JSON received, but no usable rain score was found." : null,
-    raw: data
+    fetchedAt,
+    validityTime: normalizeIsoDate(metadata.validity_time || metadata.validityTime) || null,
+    observation: METEOFRANCE_RADAR_OBSERVATION,
+    zone: METEOFRANCE_RADAR_ZONE,
+    mesh: 1000,
+    productUrl,
+    format: "gzip-bufr",
+    score: null,
+    precipitationMm: null,
+    probability: null,
+    message: productUrl
+      ? "Météo-France radar metadata OK; BUFR product parsing not implemented yet."
+      : "Météo-France radar metadata received, but no maille=1000 BUFR product link was found.",
+    metadata: {
+      mesh500ProductUrl
+    },
+    diagnostics: {
+      configured: true,
+      metadataEndpoint: METEOFRANCE_RADAR_METADATA_URL,
+      productLinkFound: !!productUrl
+    }
   };
 }
 
@@ -93,33 +97,11 @@ export async function fetchRainViewerRadar({ latitude, longitude, enabled = true
   };
 }
 
-async function buildMeteoFranceHeaders(env) {
-  const headers = {
-    "accept": "application/json"
-  };
-
-  if (env.METEOFRANCE_APPLICATION_ID) {
-    headers.authorization = `Bearer ${await fetchMeteoFranceOAuthToken(env.METEOFRANCE_APPLICATION_ID)}`;
-    return headers;
-  }
-
-  if (env.METEOFRANCE_API_KEY) {
-    headers.apikey = env.METEOFRANCE_API_KEY;
-    return headers;
-  }
-
-  if (env.METEOFRANCE_API_TOKEN) {
-    headers.authorization = `Bearer ${env.METEOFRANCE_API_TOKEN}`;
-  }
-
-  return headers;
-}
-
-async function fetchMeteoFranceOAuthToken(applicationId) {
+async function obtainMeteoFranceAccessToken(env) {
   const response = await fetch(METEOFRANCE_TOKEN_URL, {
     method: "POST",
     headers: {
-      "authorization": `Basic ${applicationId}`,
+      "authorization": `Basic ${env.METEOFRANCE_APPLICATION_ID}`,
       "content-type": "application/x-www-form-urlencoded"
     },
     body: "grant_type=client_credentials"
@@ -130,7 +112,7 @@ async function fetchMeteoFranceOAuthToken(applicationId) {
   }
 
   const data = await response.json();
-  const token = data.access_token || data.token;
+  const token = data.access_token;
 
   if (!token) {
     throw new Error("Météo-France token response did not contain an access token.");
@@ -139,36 +121,87 @@ async function fetchMeteoFranceOAuthToken(applicationId) {
   return token;
 }
 
-function coerceRadarScore(data) {
-  const directScore = coerceNumber(data.score, data.risk, data.rainRisk);
+async function fetchMeteoFranceJsonWithOAuth(env, url) {
+  const response = await fetchMeteoFranceWithOAuth(env, url, {
+    headers: {
+      "accept": "application/json"
+    }
+  });
 
-  if (directScore !== null) {
-    return directScore > 1 ? directScore / 100 : directScore;
+  if (!response.ok) {
+    throw new Error(`Météo-France radar HTTP ${response.status}`);
   }
 
-  const probability = coerceNumber(data.probability, data.rainProbability, data.prob);
-
-  if (probability !== null) {
-    return probability > 1 ? probability / 100 : probability;
-  }
-
-  const rainRate = coerceNumber(data.precipitationMm, data.precipitation, data.rainRate, data.rain_rate, data.value);
-
-  if (rainRate !== null) {
-    return Math.min(1, rainRate / 2);
-  }
-
-  return null;
+  return response.json();
 }
 
-function coerceNumber(...values) {
-  for (const value of values) {
-    const number = Number(value);
+async function fetchMeteoFranceWithOAuth(env, url, options = {}) {
+  const accessToken = await obtainMeteoFranceAccessToken(env);
+  const response = await fetchWithBearer(url, accessToken, options);
 
-    if (Number.isFinite(number)) {
-      return number;
-    }
+  if (response.status !== 401) {
+    return response;
   }
 
-  return null;
+  const body = await response.text().catch(() => "");
+
+  if (!body.includes("Invalid JWT token")) {
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers
+    });
+  }
+
+  const refreshedAccessToken = await obtainMeteoFranceAccessToken(env);
+  return fetchWithBearer(url, refreshedAccessToken, options);
+}
+
+function fetchWithBearer(url, accessToken, options = {}) {
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      "authorization": `Bearer ${accessToken}`
+    }
+  });
+}
+
+function findMeteoFranceProductUrl(value, mesh) {
+  const expectedMesh = `maille=${mesh}`;
+  const urls = collectUrls(value);
+  return urls.find((url) => url.includes("produit") && url.includes(expectedMesh)) || null;
+}
+
+function collectUrls(value) {
+  if (!value) {
+    return [];
+  }
+
+  if (typeof value === "string") {
+    return isHttpUrl(value) ? [value] : [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap(collectUrls);
+  }
+
+  if (typeof value === "object") {
+    return Object.values(value).flatMap(collectUrls);
+  }
+
+  return [];
+}
+
+function isHttpUrl(value) {
+  return /^https?:\/\//i.test(value);
+}
+
+function normalizeIsoDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }

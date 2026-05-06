@@ -474,8 +474,10 @@ function renderRadar(radar, location) {
   const rainViewer = radar?.rainViewer;
   const meteoFrance = radar?.meteoFrance;
 
-  if (meteoFrance?.ok) {
-    els.radarStatus.textContent = `Radar Météo-France actif${meteoFrance.fetchedAt ? ` · ${formatDate(meteoFrance.fetchedAt)}` : ""}.`;
+  if (meteoFrance?.ok && rainViewer?.ok) {
+    els.radarStatus.textContent = `Radar Météo-France actif${meteoFrance.validityTime ? ` · donnée du ${formatDate(meteoFrance.validityTime)}` : ""} · carte RainViewer en fallback visuel.`;
+  } else if (meteoFrance?.ok) {
+    els.radarStatus.textContent = `Radar Météo-France actif${meteoFrance.validityTime ? ` · donnée du ${formatDate(meteoFrance.validityTime)}` : ""} · carte native non disponible.`;
   } else if (rainViewer?.ok) {
     els.radarStatus.textContent = `Fallback RainViewer · image ${formatDate(rainViewer.frameTime || rainViewer.generatedAt)}`;
   } else {

@@ -76,14 +76,24 @@ Dans l'app, active ntfy dans les réglages.
 
 ## Météo-France radar
 
-Crée un compte sur le portail API Météo-France, récupère ton accès à l'API radar, puis configure :
+Crée un compte sur le portail API Météo-France, puis souscris à l'API Données Radar.
+
+Configure ensuite le secret OAuth2 :
 
 ```bash
-npx wrangler secret put METEOFRANCE_API_TOKEN
-npx wrangler secret put METEOFRANCE_RADAR_API_URL
+npx wrangler secret put METEOFRANCE_APPLICATION_ID
 ```
 
-Le module accepte actuellement un endpoint JSON déjà exploitable. Si l'API renvoie un format brut radar, il faudra ajouter un petit parseur ou un endpoint de prétraitement.
+La valeur à saisir est la partie située après `Authorization: Basic` dans le cURL OAuth2 fourni par le portail Météo-France.
+
+Produit radar validé :
+
+- zone : `METROPOLE` ;
+- observation : `LAME_D_EAU` ;
+- maille : `1000` ;
+- format : gzip → BUFR.
+
+RainViewer reste le fallback visuel de la carte tant que le produit BUFR Météo-France n'est pas parsé et rendu nativement.
 
 ## Ecowitt
 
