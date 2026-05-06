@@ -1,8 +1,8 @@
 const RAINVIEWER_URL = "https://api.rainviewer.com/public/weather-maps.json";
 const METEOFRANCE_TOKEN_URL = "https://portail-api.meteofrance.fr/token";
+const METEOFRANCE_RADAR_CATALOG_URL = "https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques";
 const METEOFRANCE_RADAR_ZONE = "METROPOLE";
 const METEOFRANCE_RADAR_OBSERVATION = "LAME_D_EAU";
-const METEOFRANCE_RADAR_METADATA_URL = `https://public-api.meteofrance.fr/public/DPRadar/mosaiques/${METEOFRANCE_RADAR_ZONE}/observations/${METEOFRANCE_RADAR_OBSERVATION}`;
 
 export async function fetchMeteoFranceRadar({ env }) {
   const fetchedAt = new Date().toISOString();
@@ -21,7 +21,14 @@ export async function fetchMeteoFranceRadar({ env }) {
     };
   }
 
-  const metadata = await fetchMeteoFranceJsonWithOAuth(env, METEOFRANCE_RADAR_METADATA_URL);
+  const tokenState = {};
+  const catalog = await fetchMeteoFranceJsonWithOAuth(env, METEOFRANCE_RADAR_CATALOG_URL, tokenState);
+  const zoneUrl = requireMeteoFranceLink(catalog, (url) => trimTrailingSlash(url).endsWith(`/mosaiques/${METEOFRANCE_RADAR_ZONE}`), `${METEOFRANCE_RADAR_ZONE} zone`);
+  const zoneMetadata = await fetchMeteoFranceJsonWithOAuth(env, zoneUrl, tokenState);
+  const observationsUrl = requireMeteoFranceLink(zoneMetadata, (url) => trimTrailingSlash(url).endsWith(`/mosaiques/${METEOFRANCE_RADAR_ZONE}/observations`), `${METEOFRANCE_RADAR_ZONE} observations`);
+  const observations = await fetchMeteoFranceJsonWithOAuth(env, observationsUrl, tokenState);
+  const observationUrl = requireMeteoFranceLink(observations, (url) => trimTrailingSlash(url).endsWith(`/observations/${METEOFRANCE_RADAR_OBSERVATION}`), `${METEOFRANCE_RADAR_OBSERVATION} observation`);
+  const metadata = await fetchMeteoFranceJsonWithOAuth(env, observationUrl, tokenState);
   const productUrl = findMeteoFranceProductUrl(metadata, 1000);
   const mesh500ProductUrl = findMeteoFranceProductUrl(metadata, 500);
 
@@ -47,7 +54,10 @@ export async function fetchMeteoFranceRadar({ env }) {
     },
     diagnostics: {
       configured: true,
-      metadataEndpoint: METEOFRANCE_RADAR_METADATA_URL,
+      catalogEndpoint: METEOFRANCE_RADAR_CATALOG_URL,
+      zoneEndpoint: zoneUrl,
+      observationsEndpoint: observationsUrl,
+      observationEndpoint: observationUrl,
       productLinkFound: !!productUrl
     }
   };
@@ -108,10 +118,10 @@ async function obtainMeteoFranceAccessToken(env) {
   });
 
   if (!response.ok) {
-    throw new Error(`Météo-France token HTTP ${response.status}`);
+    throw new Error(await buildMeteoFranceHttpError(response, METEOFRANCE_TOKEN_URL, "Météo-France token"));
   }
 
-  const data = await response.json();
+  const data = await readMeteoFranceJsonResponse(response, METEOFRANCE_TOKEN_URL, "Météo-France token");
   const token = data.access_token;
 
   if (!token) {
@@ -121,23 +131,26 @@ async function obtainMeteoFranceAccessToken(env) {
   return token;
 }
 
-async function fetchMeteoFranceJsonWithOAuth(env, url) {
+async function fetchMeteoFranceJsonWithOAuth(env, url, tokenState = {}) {
   const response = await fetchMeteoFranceWithOAuth(env, url, {
     headers: {
       "accept": "application/json"
     }
-  });
+  }, tokenState);
 
   if (!response.ok) {
-    throw new Error(`Météo-France radar HTTP ${response.status}`);
+    throw new Error(await buildMeteoFranceHttpError(response, url, "Météo-France radar"));
   }
 
-  return response.json();
+  return readMeteoFranceJsonResponse(response, url, "Météo-France radar");
 }
 
-async function fetchMeteoFranceWithOAuth(env, url, options = {}) {
-  const accessToken = await obtainMeteoFranceAccessToken(env);
-  const response = await fetchWithBearer(url, accessToken, options);
+async function fetchMeteoFranceWithOAuth(env, url, options = {}, tokenState = {}) {
+  if (!tokenState.accessToken) {
+    tokenState.accessToken = await obtainMeteoFranceAccessToken(env);
+  }
+
+  const response = await fetchWithBearer(url, tokenState.accessToken, options);
 
   if (response.status !== 401) {
     return response;
@@ -153,8 +166,8 @@ async function fetchMeteoFranceWithOAuth(env, url, options = {}) {
     });
   }
 
-  const refreshedAccessToken = await obtainMeteoFranceAccessToken(env);
-  return fetchWithBearer(url, refreshedAccessToken, options);
+  tokenState.accessToken = await obtainMeteoFranceAccessToken(env);
+  return fetchWithBearer(url, tokenState.accessToken, options);
 }
 
 function fetchWithBearer(url, accessToken, options = {}) {
@@ -165,6 +178,41 @@ function fetchWithBearer(url, accessToken, options = {}) {
       "authorization": `Bearer ${accessToken}`
     }
   });
+}
+
+async function readMeteoFranceJsonResponse(response, url, label) {
+  const contentType = response.headers.get("content-type") || "";
+  const body = await response.text();
+
+  if (!contentType.toLowerCase().includes("application/json")) {
+    throw new Error(`${label} returned ${contentType || "unknown content type"} instead of JSON from ${url}: ${summarizeBody(body)}`);
+  }
+
+  try {
+    return JSON.parse(body);
+  } catch (error) {
+    throw new Error(`${label} returned invalid JSON from ${url}: ${summarizeBody(body)}`);
+  }
+}
+
+async function buildMeteoFranceHttpError(response, url, label) {
+  const contentType = response.headers.get("content-type") || "";
+  const body = await response.text().catch(() => "");
+  return `${label} HTTP ${response.status} from ${url}${contentType ? ` (${contentType})` : ""}: ${summarizeBody(body)}`;
+}
+
+function requireMeteoFranceLink(value, predicate, label) {
+  const url = findMeteoFranceLink(value, predicate);
+
+  if (!url) {
+    throw new Error(`Météo-France radar link not found: ${label}.`);
+  }
+
+  return url;
+}
+
+function findMeteoFranceLink(value, predicate) {
+  return collectUrls(value).find(predicate) || null;
 }
 
 function findMeteoFranceProductUrl(value, mesh) {
@@ -195,6 +243,15 @@ function collectUrls(value) {
 
 function isHttpUrl(value) {
   return /^https?:\/\//i.test(value);
+}
+
+function trimTrailingSlash(value) {
+  return String(value || "").replace(/\/+$/, "");
+}
+
+function summarizeBody(body) {
+  const normalized = String(body || "").replace(/\s+/g, " ").trim();
+  return normalized ? normalized.slice(0, 180) : "empty response body";
 }
 
 function normalizeIsoDate(value) {

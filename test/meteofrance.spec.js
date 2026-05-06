@@ -1,6 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchMeteoFranceRadar } from "../src/sources/meteofrance.js";
 
+const catalogPayload = {
+  links: [
+    {
+      href: "https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE"
+    }
+  ]
+};
+
+const zonePayload = {
+  links: [
+    {
+      href: "https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations"
+    }
+  ]
+};
+
+const observationsPayload = {
+  links: [
+    {
+      href: "https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU"
+    }
+  ]
+};
+
 const metadataPayload = {
   validity_time: "2026-05-06T16:35:00Z",
   links: [
@@ -13,7 +37,7 @@ const metadataPayload = {
   ]
 };
 
-describe("Météo-France radar source", () => {
+describe("Meteo-France radar source", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-06T18:00:00.000Z"));
@@ -43,9 +67,12 @@ describe("Météo-France radar source", () => {
     });
   });
 
-  it("gets an OAuth2 token and returns LAME_D_EAU metadata with the 1000 m product link", async () => {
+  it("gets an OAuth2 token and follows DPRadar links to the 1000 m product", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ access_token: "access-token-1" }))
+      .mockResolvedValueOnce(jsonResponse(catalogPayload))
+      .mockResolvedValueOnce(jsonResponse(zonePayload))
+      .mockResolvedValueOnce(jsonResponse(observationsPayload))
       .mockResolvedValueOnce(jsonResponse(metadataPayload));
 
     const radar = await fetchMeteoFranceRadar({
@@ -62,8 +89,10 @@ describe("Météo-France radar source", () => {
       },
       body: "grant_type=client_credentials"
     });
-    expect(fetchMock.mock.calls[1][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU");
+    expect(fetchMock.mock.calls[1][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques");
     expect(fetchMock.mock.calls[1][1].headers.authorization).toBe("Bearer access-token-1");
+    expect(fetchMock.mock.calls[4][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU");
+    expect(fetchMock.mock.calls[4][1].headers.authorization).toBe("Bearer access-token-1");
     expect(radar).toMatchObject({
       ok: true,
       enabled: true,
@@ -82,11 +111,14 @@ describe("Météo-France radar source", () => {
     expect(JSON.stringify(radar)).not.toContain("access-token-1");
   });
 
-  it("refreshes the OAuth2 token once when Météo-France returns an invalid JWT", async () => {
+  it("refreshes the OAuth2 token once when Meteo-France returns an invalid JWT", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ access_token: "expired-token" }))
       .mockResolvedValueOnce(new Response("Invalid JWT token", { status: 401 }))
       .mockResolvedValueOnce(jsonResponse({ access_token: "fresh-token" }))
+      .mockResolvedValueOnce(jsonResponse(catalogPayload))
+      .mockResolvedValueOnce(jsonResponse(zonePayload))
+      .mockResolvedValueOnce(jsonResponse(observationsPayload))
       .mockResolvedValueOnce(jsonResponse(metadataPayload));
 
     const radar = await fetchMeteoFranceRadar({
@@ -95,12 +127,30 @@ describe("Météo-France radar source", () => {
       }
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
     expect(fetchMock.mock.calls[1][1].headers.authorization).toBe("Bearer expired-token");
     expect(fetchMock.mock.calls[3][1].headers.authorization).toBe("Bearer fresh-token");
+    expect(fetchMock.mock.calls[6][1].headers.authorization).toBe("Bearer fresh-token");
     expect(radar.ok).toBe(true);
     expect(JSON.stringify(radar)).not.toContain("application-id");
     expect(JSON.stringify(radar)).not.toContain("fresh-token");
+  });
+
+  it("reports non-JSON radar responses clearly", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ access_token: "access-token-1" }))
+      .mockResolvedValueOnce(new Response("<html><head><title>Portal</title></head></html>", {
+        status: 200,
+        headers: {
+          "content-type": "text/html; charset=utf-8"
+        }
+      }));
+
+    await expect(fetchMeteoFranceRadar({
+      env: {
+        METEOFRANCE_APPLICATION_ID: "application-id"
+      }
+    })).rejects.toThrow("instead of JSON");
   });
 });
 
@@ -108,7 +158,7 @@ function jsonResponse(value, init = {}) {
   return new Response(JSON.stringify(value), {
     status: 200,
     headers: {
-      "content-type": "application/json"
+      "content-type": "application/json; charset=utf-8"
     },
     ...init
   });
