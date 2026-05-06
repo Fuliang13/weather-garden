@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_LOCATION, DEFAULT_SETTINGS, buildWeatherStatus } from "../src/scoring.js";
-import { buildGardenStatus, normalizeGardenState } from "../src/garden.js";
+import { buildGardenStatus, buildGeneratedGardenAlerts, normalizeGardenState } from "../src/garden.js";
 
 describe("weather scoring", () => {
   it("builds a compact no-rain signal when all forecast windows are dry", () => {
@@ -71,5 +71,35 @@ describe("weather scoring", () => {
     expect(garden.summary.entityCount).toBe(1);
     expect(garden.entities[0]).toMatchObject({ id: "north-vine", type: "vine" });
     expect(garden.alerts.active[0]).toMatchObject({ category: "frost", level: "watch", entityId: "north-vine" });
+  });
+
+  it("builds generated garden alerts from weather data", () => {
+    const gardenState = normalizeGardenState({
+      entities: [
+        {
+          id: "north-vine",
+          type: "vine",
+          name: "Vigne nord"
+        }
+      ]
+    });
+    const alerts = buildGeneratedGardenAlerts(gardenState, {
+      current: {
+        temperatureC: 0.5,
+        humidityPct: 88,
+        gustKmh: 75,
+        windKmh: 12
+      },
+      rain: {
+        activeNow: true,
+        horizons: [
+          { minutes: 120, precipitationMm: 3 }
+        ]
+      }
+    }, DEFAULT_SETTINGS, new Date("2026-05-06T12:00:00.000Z"));
+
+    expect(alerts.some((alert) => alert.id === "north-vine-frost-risk")).toBe(true);
+    expect(alerts.some((alert) => alert.id === "north-vine-wind-risk")).toBe(true);
+    expect(alerts[0].details.every((detail) => typeof detail === "string")).toBe(true);
   });
 });

@@ -441,6 +441,10 @@ function normalizeObject(value) {
   return isPlainObject(value) ? value : {};
 }
 
+function isPlainObject(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function toArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -482,6 +486,14 @@ function countBy(items, key) {
     counts[value] = (counts[value] || 0) + 1;
     return counts;
   }, {});
+}
+
+function formatNumber(value) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+
+  return String(Math.round(value * 10) / 10);
 }
 
 function formatDuration(minutes) {
