@@ -94,14 +94,21 @@ npx wrangler secret put METEOFRANCE_APPLICATION_ID
 
 La valeur à saisir est la partie située après `Authorization: Basic` dans le cURL OAuth2 fourni par le portail Météo-France. Le Worker appelle alors `/token` pour obtenir un access token, puis appelle DPRadar avec `Authorization: Bearer <accessToken>`. Ce mode fonctionne en local, mais peut recevoir une page HTML `Request Rejected` depuis Cloudflare Worker.
 
-Produit radar validé :
+Produit radar prioritaire :
 
 - zone : `METROPOLE` ;
 - observation : `LAME_D_EAU` ;
-- maille : `1000` ;
-- format : gzip → BUFR.
+- maille : `500` ;
+- format : HDF5 ;
+- produit : lame d'eau radar nationale 500 m, produite toutes les 5 minutes.
 
-RainViewer reste le fallback visuel de la carte tant que le produit BUFR Météo-France n'est pas parsé et rendu nativement.
+Objectif d'animation : conserver jusqu'à 24 frames dérivées, soit environ 2 heures lorsque les données sont espacées de 5 minutes.
+
+Le produit `maille=1000 / BUFR` reste uniquement un fallback de diagnostic si le HDF5 500 m n'est pas présent. Il n'est pas parsé dans l'application.
+
+RainViewer reste le fallback visuel de la carte tant que le HDF5 Météo-France n'est pas décodé avec une grille, une projection et des bounds fiables. Aucun rendu radar natif fictif n'est affiché.
+
+COMEPHORE est une réanalyse historique horaire ; ce n'est pas le produit temps réel utilisé pour l'animation radar.
 
 ## Ecowitt
 

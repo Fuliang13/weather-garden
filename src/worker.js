@@ -1,6 +1,6 @@
 import { fetchOpenMeteoArome } from "./sources/openMeteo.js";
 import { fetchMetNorway } from "./sources/metNorway.js";
-import { debugMeteoFranceRadar, fetchMeteoFranceRadar, fetchRainViewerRadar } from "./sources/meteofrance.js";
+import { debugMeteoFranceHdf5, debugMeteoFranceRadar, fetchMeteoFranceRadar, fetchRainViewerRadar } from "./sources/meteofrance.js";
 import { fetchEcowittObservation } from "./sources/ecowitt.js";
 import { DEFAULT_LOCATION, DEFAULT_SETTINGS, buildWeatherStatus, mergeSettings } from "./scoring.js";
 import { buildGardenStatus, createDefaultGardenState, deleteGardenEntity, normalizeGardenState, upsertGardenEntity } from "./garden.js";
@@ -43,6 +43,10 @@ export default {
 
       if (url.pathname === "/api/debug/meteofrance" && request.method === "GET") {
         return json(sanitizeDebugPayload(await debugMeteoFranceRadar({ env })));
+      }
+
+      if (url.pathname === "/api/debug/meteofrance/hdf5" && request.method === "GET") {
+        return json(sanitizeDebugPayload(await debugMeteoFranceHdf5({ env })));
       }
 
       if (url.pathname === "/api/debug/ecowitt" && request.method === "GET") {
@@ -172,6 +176,7 @@ async function getDebugStatus(env) {
       "/api/debug/status",
       "/api/debug/sources",
       "/api/debug/meteofrance",
+      "/api/debug/meteofrance/hdf5",
       "/api/debug/ecowitt",
       "/api/debug/rain",
       "/api/garden",

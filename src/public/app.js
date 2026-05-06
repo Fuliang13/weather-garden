@@ -6,6 +6,7 @@ const state = {
   radarMap: null,
   radarBaseLayer: null,
   radarRainLayer: null,
+  radarNativeLayer: null,
   radarMarker: null,
   refreshTimer: null,
   countdownTimer: null,
@@ -473,25 +474,26 @@ function renderGardenAlerts(alerts) {
 function renderRadar(radar, location) {
   const rainViewer = radar?.rainViewer;
   const meteoFrance = radar?.meteoFrance;
+  const nativeLayer = meteoFrance?.nativeLayer?.ok ? meteoFrance.nativeLayer : null;
+  const tileUrlTemplate = nativeLayer ? null : getRainViewerTileUrl(rainViewer);
 
-  if (meteoFrance?.ok && rainViewer?.ok) {
-    els.radarStatus.textContent = `Radar Météo-France actif${meteoFrance.validityTime ? ` · donnée du ${formatDate(meteoFrance.validityTime)}` : ""} · carte RainViewer en fallback visuel.`;
-  } else if (meteoFrance?.ok) {
-    els.radarStatus.textContent = `Radar Météo-France actif${meteoFrance.validityTime ? ` · donnée du ${formatDate(meteoFrance.validityTime)}` : ""} · carte native non disponible.`;
+  if (nativeLayer) {
+    els.radarStatus.textContent = `${uiText("@{%Radar Météo-France natif affiché%}")}${meteoFrance.validityTime ? ` · ${uiText("@{%donnée radar du%}")} ${formatDate(meteoFrance.validityTime)}` : ""}.`;
   } else if (rainViewer?.ok) {
-    els.radarStatus.textContent = `Fallback RainViewer · image ${formatDate(rainViewer.frameTime || rainViewer.generatedAt)}`;
+    els.radarStatus.textContent = buildRainViewerFallbackText(meteoFrance, rainViewer);
+  } else if (meteoFrance?.ok) {
+    els.radarStatus.textContent = `${uiText("@{%Radar Météo-France disponible, mais couche native non exploitable%}")}${meteoFrance.diagnostics?.fallbackReason ? ` · ${meteoFrance.diagnostics.fallbackReason}` : ""}.`;
   } else {
-    els.radarStatus.textContent = "Aucun radar disponible pour le moment.";
+    els.radarStatus.textContent = uiText("@{%Aucun radar disponible pour le moment.%}");
   }
 
-  const tileUrlTemplate = getRainViewerTileUrl(rainViewer);
-  renderRadarMap(location, tileUrlTemplate);
+  renderRadarMap(location, { nativeLayer, rainViewerTileUrl: tileUrlTemplate });
 
-  els.radarLegend.hidden = !tileUrlTemplate;
-  els.radarAttribution.textContent = tileUrlTemplate ? "RainViewer · OpenStreetMap" : "";
+  els.radarLegend.hidden = !nativeLayer && !tileUrlTemplate;
+  els.radarAttribution.textContent = nativeLayer ? uiText("@{%Météo-France · OpenStreetMap%}") : (tileUrlTemplate ? "RainViewer · OpenStreetMap" : "");
 }
 
-function renderRadarMap(location, tileUrlTemplate) {
+function renderRadarMap(location, { nativeLayer, rainViewerTileUrl }) {
   if (!els.radarMap) {
     return;
   }
@@ -512,7 +514,8 @@ function renderRadarMap(location, tileUrlTemplate) {
   }
 
   ensureRadarMap(center, location);
-  updateRainLayer(tileUrlTemplate);
+  updateNativeRadarLayer(nativeLayer);
+  updateRainLayer(rainViewerTileUrl);
 
   window.setTimeout(() => {
     state.radarMap.invalidateSize();
@@ -540,6 +543,23 @@ function ensureRadarMap(center, location) {
   const markerContent = document.createElement("strong");
   markerContent.textContent = location?.name || "Position météo";
   state.radarMarker.bindPopup(markerContent);
+}
+
+function updateNativeRadarLayer(nativeLayer) {
+  if (state.radarNativeLayer) {
+    state.radarMap.removeLayer(state.radarNativeLayer);
+    state.radarNativeLayer = null;
+  }
+
+  if (!nativeLayer?.imageDataUrl || !Array.isArray(nativeLayer.bounds) || nativeLayer.bounds.length !== 2) {
+    return;
+  }
+
+  state.radarNativeLayer = window.L.imageOverlay(nativeLayer.imageDataUrl, nativeLayer.bounds, {
+    opacity: 0.68,
+    zIndex: 20,
+    attribution: uiText("@{%Météo-France%}")
+  }).addTo(state.radarMap);
 }
 
 function updateRainLayer(tileUrlTemplate) {
@@ -630,6 +650,17 @@ function setFieldChecked(name, value) {
   if (els.settingsForm?.[name]) {
     els.settingsForm[name].checked = !!value;
   }
+}
+
+function buildRainViewerFallbackText(meteoFrance, rainViewer) {
+  const frameTime = formatDate(rainViewer.frameTime || rainViewer.generatedAt);
+
+  if (!meteoFrance?.ok) {
+    return `${uiText("@{%Fallback RainViewer affiché%}")} · ${uiText("@{%image radar du%}")} ${frameTime}`;
+  }
+
+  const reason = meteoFrance.diagnostics?.fallbackReason || meteoFrance.nativeLayer?.reason || meteoFrance.message;
+  return `${uiText("@{%Fallback RainViewer affiché%}")} · ${reason} · ${uiText("@{%image radar du%}")} ${frameTime}`;
 }
 
 function getRainViewerTileUrl(rainViewer) {

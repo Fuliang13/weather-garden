@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { debugMeteoFranceRadar, fetchMeteoFranceRadar } from "../src/sources/meteofrance.js";
+import { debugMeteoFranceHdf5, debugMeteoFranceRadar, fetchMeteoFranceRadar } from "../src/sources/meteofrance.js";
 
 const catalogPayload = {
   links: [
@@ -29,7 +29,7 @@ const metadataPayload = {
   validity_time: "2026-05-06T16:35:00Z",
   links: [
     {
-      href: "https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU/produit?maille=500"
+      href: "https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU/produit?maille=500&token=secret-product-token"
     },
     {
       href: "https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU/produit?maille=1000"
@@ -37,7 +37,18 @@ const metadataPayload = {
   ]
 };
 
-const radarProductUrl = "https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU/produit?maille=1000";
+const metadataWithoutHdf5Payload = {
+  validity_time: "2026-05-06T16:35:00Z",
+  links: [
+    {
+      href: "https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU/produit?maille=1000"
+    }
+  ]
+};
+
+const radarHdf5ProductUrl = "https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU/produit?maille=500";
+const radarBufrProductUrl = "https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU/produit?maille=1000";
+const hdf5Signature = new Uint8Array([0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
 
 describe("Meteo-France radar source", () => {
   beforeEach(() => {
@@ -70,12 +81,13 @@ describe("Meteo-France radar source", () => {
     });
   });
 
-  it("uses the API key directly and follows DPRadar links to the 1000 m product", async () => {
+  it("uses the API key directly and makes the 500 m HDF5 product primary", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse(catalogPayload))
       .mockResolvedValueOnce(jsonResponse(zonePayload))
       .mockResolvedValueOnce(jsonResponse(observationsPayload))
-      .mockResolvedValueOnce(jsonResponse(metadataPayload));
+      .mockResolvedValueOnce(jsonResponse(metadataPayload))
+      .mockResolvedValueOnce(binaryResponse(hdf5Signature));
 
     const radar = await fetchMeteoFranceRadar({
       env: {
@@ -84,12 +96,14 @@ describe("Meteo-France radar source", () => {
       }
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(fetchMock.mock.calls.some(([url]) => url === "https://portail-api.meteofrance.fr/token")).toBe(false);
     expect(fetchMock.mock.calls[0][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques");
     expect(fetchMock.mock.calls[0][1].headers.authorization).toBe("Bearer api-key-token");
     expect(fetchMock.mock.calls[3][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU");
     expect(fetchMock.mock.calls[3][1].headers.authorization).toBe("Bearer api-key-token");
+    expect(fetchMock.mock.calls[4][0]).toContain("maille=500");
+    expect(fetchMock.mock.calls[4][1].headers.authorization).toBe("Bearer api-key-token");
     expect(radar).toMatchObject({
       ok: true,
       enabled: true,
@@ -97,28 +111,45 @@ describe("Meteo-France radar source", () => {
       validityTime: "2026-05-06T16:35:00.000Z",
       observation: "LAME_D_EAU",
       zone: "METROPOLE",
-      mesh: 1000,
-      productUrl: radarProductUrl,
-      format: "gzip-bufr",
+      mesh: 500,
+      productUrl: radarHdf5ProductUrl,
+      fallbackProductUrl: radarBufrProductUrl,
+      format: "hdf5",
+      frameLimit: 24,
+      frames: [],
       score: null,
       precipitationMm: null,
       probability: null,
       diagnostics: {
         configured: true,
-        authMode: "api-key"
+        authMode: "api-key",
+        product500Found: true,
+        product1000Found: true,
+        selectedMesh: 500,
+        selectedFormat: "hdf5",
+        hdf5: {
+          downloadOk: true,
+          signatureOk: true,
+          parsingOk: false,
+          parser: "not-implemented"
+        },
+        nativeLayerAvailable: false
       }
     });
+    expect(radar.message).toContain("HDF5 500 m product is available");
     expect(JSON.stringify(radar)).not.toContain("api-key-token");
     expect(JSON.stringify(radar)).not.toContain("application-id");
+    expect(JSON.stringify(radar)).not.toContain("secret-product-token");
   });
 
-  it("gets an OAuth2 token and follows DPRadar links to the 1000 m product", async () => {
+  it("gets an OAuth2 token and follows DPRadar links to the 500 m HDF5 product", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ access_token: "access-token-1" }))
       .mockResolvedValueOnce(jsonResponse(catalogPayload))
       .mockResolvedValueOnce(jsonResponse(zonePayload))
       .mockResolvedValueOnce(jsonResponse(observationsPayload))
-      .mockResolvedValueOnce(jsonResponse(metadataPayload));
+      .mockResolvedValueOnce(jsonResponse(metadataPayload))
+      .mockResolvedValueOnce(binaryResponse(hdf5Signature));
 
     const radar = await fetchMeteoFranceRadar({
       env: {
@@ -141,7 +172,8 @@ describe("Meteo-France radar source", () => {
     expect(fetchMock.mock.calls[1][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques");
     expect(fetchMock.mock.calls[1][1].headers.authorization).toBe("Bearer access-token-1");
     expect(fetchMock.mock.calls[4][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU");
-    expect(fetchMock.mock.calls[4][1].headers.authorization).toBe("Bearer access-token-1");
+    expect(fetchMock.mock.calls[5][0]).toContain("maille=500");
+    expect(fetchMock.mock.calls[5][1].headers.authorization).toBe("Bearer access-token-1");
     expect(radar).toMatchObject({
       ok: true,
       enabled: true,
@@ -149,19 +181,23 @@ describe("Meteo-France radar source", () => {
       validityTime: "2026-05-06T16:35:00.000Z",
       observation: "LAME_D_EAU",
       zone: "METROPOLE",
-      mesh: 1000,
-      productUrl: radarProductUrl,
-      format: "gzip-bufr",
-      score: null,
-      precipitationMm: null,
-      probability: null,
+      mesh: 500,
+      productUrl: radarHdf5ProductUrl,
+      fallbackProductUrl: radarBufrProductUrl,
+      format: "hdf5",
       diagnostics: {
         configured: true,
-        authMode: "oauth2"
+        authMode: "oauth2",
+        product500Found: true,
+        selectedMesh: 500,
+        hdf5: {
+          signatureOk: true
+        }
       }
     });
     expect(JSON.stringify(radar)).not.toContain("application-id");
     expect(JSON.stringify(radar)).not.toContain("access-token-1");
+    expect(JSON.stringify(radar)).not.toContain("secret-product-token");
   });
 
   it("refreshes the OAuth2 token once when Meteo-France returns an invalid JWT", async () => {
@@ -172,7 +208,8 @@ describe("Meteo-France radar source", () => {
       .mockResolvedValueOnce(jsonResponse(catalogPayload))
       .mockResolvedValueOnce(jsonResponse(zonePayload))
       .mockResolvedValueOnce(jsonResponse(observationsPayload))
-      .mockResolvedValueOnce(jsonResponse(metadataPayload));
+      .mockResolvedValueOnce(jsonResponse(metadataPayload))
+      .mockResolvedValueOnce(binaryResponse(hdf5Signature));
 
     const radar = await fetchMeteoFranceRadar({
       env: {
@@ -180,18 +217,97 @@ describe("Meteo-France radar source", () => {
       }
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(7);
+    expect(fetchMock).toHaveBeenCalledTimes(8);
     expect(fetchMock.mock.calls[1][1].headers.authorization).toBe("Bearer expired-token");
     expect(fetchMock.mock.calls[3][1].headers.authorization).toBe("Bearer fresh-token");
-    expect(fetchMock.mock.calls[6][1].headers.authorization).toBe("Bearer fresh-token");
+    expect(fetchMock.mock.calls[7][1].headers.authorization).toBe("Bearer fresh-token");
     expect(radar.ok).toBe(true);
+    expect(radar.mesh).toBe(500);
     expect(JSON.stringify(radar)).not.toContain("application-id");
     expect(JSON.stringify(radar)).not.toContain("fresh-token");
   });
 
-  it("reports API key catalog diagnostics without exposing the secret", async () => {
+  it("keeps the 1000 m BUFR product as fallback when the 500 m HDF5 product is absent", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(jsonResponse(catalogPayload));
+      .mockResolvedValueOnce(jsonResponse(catalogPayload))
+      .mockResolvedValueOnce(jsonResponse(zonePayload))
+      .mockResolvedValueOnce(jsonResponse(observationsPayload))
+      .mockResolvedValueOnce(jsonResponse(metadataWithoutHdf5Payload));
+
+    const radar = await fetchMeteoFranceRadar({
+      env: {
+        METEOFRANCE_API_KEY: "api-key-token"
+      }
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(radar).toMatchObject({
+      ok: true,
+      mesh: 1000,
+      format: "gzip-bufr",
+      productUrl: null,
+      fallbackProductUrl: radarBufrProductUrl,
+      diagnostics: {
+        product500Found: false,
+        product1000Found: true,
+        selectedMesh: 1000,
+        selectedFormat: "gzip-bufr",
+        nativeLayerAvailable: false,
+        fallbackReason: "Only the 1 km BUFR fallback product is available; BUFR parsing is out of scope."
+      }
+    });
+    expect(radar.message).toContain("only the 1 km BUFR fallback product is available");
+  });
+
+  it("reports invalid HDF5 product downloads without inventing native radar data", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(catalogPayload))
+      .mockResolvedValueOnce(jsonResponse(zonePayload))
+      .mockResolvedValueOnce(jsonResponse(observationsPayload))
+      .mockResolvedValueOnce(jsonResponse(metadataPayload))
+      .mockResolvedValueOnce(new Response("<html><head><title>Request Rejected</title></head></html>", {
+        status: 200,
+        headers: {
+          "content-type": "text/html; charset=utf-8"
+        }
+      }));
+
+    const radar = await fetchMeteoFranceRadar({
+      env: {
+        METEOFRANCE_API_KEY: "api-key-token"
+      }
+    });
+
+    expect(radar).toMatchObject({
+      ok: true,
+      mesh: 500,
+      format: "hdf5",
+      nativeLayer: {
+        ok: false
+      },
+      frames: [],
+      diagnostics: {
+        hdf5: {
+          downloadOk: true,
+          contentType: "text/html; charset=utf-8",
+          signatureOk: false,
+          parsingOk: false
+        },
+        nativeLayerAvailable: false
+      }
+    });
+    expect(radar.diagnostics.fallbackReason).toContain("valid HDF5 signature");
+    expect(JSON.stringify(radar)).not.toContain("api-key-token");
+    expect(JSON.stringify(radar)).not.toContain("secret-product-token");
+  });
+
+  it("reports API key catalog and HDF5 diagnostics without exposing the secret", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(catalogPayload))
+      .mockResolvedValueOnce(jsonResponse(zonePayload))
+      .mockResolvedValueOnce(jsonResponse(observationsPayload))
+      .mockResolvedValueOnce(jsonResponse(metadataPayload))
+      .mockResolvedValueOnce(binaryResponse(hdf5Signature));
 
     const debug = await debugMeteoFranceRadar({
       env: {
@@ -199,23 +315,70 @@ describe("Meteo-France radar source", () => {
       }
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(fetchMock.mock.calls[0][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques");
     expect(fetchMock.mock.calls[0][1].headers.authorization).toBe("Bearer api-key-token");
     expect(debug).toMatchObject({
       ok: true,
       enabled: true,
       source: "meteofrance-radar",
-      message: "Météo-France API key and radar catalog OK.",
       diagnostics: {
         configured: true,
         authMode: "api-key",
         tokenOk: null,
         catalogOk: true,
-        catalogEndpoint: "https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques"
+        catalogEndpoint: "https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques",
+        product500Found: true,
+        hdf5: {
+          signatureOk: true
+        }
       }
     });
     expect(JSON.stringify(debug)).not.toContain("api-key-token");
+    expect(JSON.stringify(debug)).not.toContain("secret-product-token");
+  });
+
+  it("reports focused HDF5 debug diagnostics without exposing secrets", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(catalogPayload))
+      .mockResolvedValueOnce(jsonResponse(zonePayload))
+      .mockResolvedValueOnce(jsonResponse(observationsPayload))
+      .mockResolvedValueOnce(jsonResponse(metadataPayload))
+      .mockResolvedValueOnce(binaryResponse(hdf5Signature));
+
+    const debug = await debugMeteoFranceHdf5({
+      env: {
+        METEOFRANCE_API_KEY: "api-key-token"
+      }
+    });
+
+    expect(debug).toMatchObject({
+      ok: true,
+      enabled: true,
+      source: "meteofrance-radar-hdf5",
+      diagnostics: {
+        configured: true,
+        authMode: "api-key",
+        product500Found: true,
+        product1000Found: true,
+        productUrl: radarHdf5ProductUrl,
+        fallbackProductUrl: radarBufrProductUrl,
+        hdf5: {
+          downloadOk: true,
+          signatureOk: true,
+          parsingOk: false,
+          datasets: [],
+          dimensions: null,
+          projection: null,
+          bounds: null
+        },
+        nativeLayerAvailable: false,
+        frameLimit: 24,
+        frameCount: 0
+      }
+    });
+    expect(JSON.stringify(debug)).not.toContain("api-key-token");
+    expect(JSON.stringify(debug)).not.toContain("secret-product-token");
   });
 
   it("reports token rejections through the safe debug endpoint", async () => {
@@ -274,6 +437,17 @@ function jsonResponse(value, init = {}) {
     status: 200,
     headers: {
       "content-type": "application/json; charset=utf-8"
+    },
+    ...init
+  });
+}
+
+function binaryResponse(value, init = {}) {
+  return new Response(value, {
+    status: 200,
+    headers: {
+      "content-type": "application/x-hdf5",
+      "content-length": String(value.byteLength)
     },
     ...init
   });
