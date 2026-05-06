@@ -3,6 +3,7 @@ const METEOFRANCE_TOKEN_URL = "https://portail-api.meteofrance.fr/token";
 const METEOFRANCE_RADAR_CATALOG_URL = "https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques";
 const METEOFRANCE_RADAR_ZONE = "METROPOLE";
 const METEOFRANCE_RADAR_OBSERVATION = "LAME_D_EAU";
+const METEOFRANCE_TOKEN_USER_AGENT_FALLBACK = "weather-garden/0.1";
 
 export async function fetchMeteoFranceRadar({ env }) {
   const fetchedAt = new Date().toISOString();
@@ -63,6 +64,82 @@ export async function fetchMeteoFranceRadar({ env }) {
   };
 }
 
+export async function debugMeteoFranceRadar({ env }) {
+  const fetchedAt = new Date().toISOString();
+
+  if (!env.METEOFRANCE_APPLICATION_ID) {
+    return {
+      ok: false,
+      enabled: false,
+      source: "meteofrance-radar",
+      fetchedAt,
+      message: "METEOFRANCE_APPLICATION_ID is not configured yet.",
+      diagnostics: {
+        configured: false,
+        tokenOk: false,
+        catalogOk: false,
+        requiredSecrets: ["METEOFRANCE_APPLICATION_ID"]
+      }
+    };
+  }
+
+  const tokenState = {};
+
+  try {
+    tokenState.accessToken = await obtainMeteoFranceAccessToken(env);
+  } catch (error) {
+    return {
+      ok: false,
+      enabled: true,
+      source: "meteofrance-radar",
+      fetchedAt,
+      message: error.message,
+      diagnostics: {
+        configured: true,
+        tokenOk: false,
+        catalogOk: false,
+        tokenEndpoint: METEOFRANCE_TOKEN_URL,
+        userAgentSent: !!getMeteoFranceUserAgent(env)
+      }
+    };
+  }
+
+  try {
+    const catalog = await fetchMeteoFranceJsonWithOAuth(env, METEOFRANCE_RADAR_CATALOG_URL, tokenState);
+
+    return {
+      ok: true,
+      enabled: true,
+      source: "meteofrance-radar",
+      fetchedAt,
+      message: "Météo-France token and radar catalog OK.",
+      diagnostics: {
+        configured: true,
+        tokenOk: true,
+        catalogOk: true,
+        catalogEndpoint: METEOFRANCE_RADAR_CATALOG_URL,
+        catalogLinkCount: collectUrls(catalog).length,
+        userAgentSent: !!getMeteoFranceUserAgent(env)
+      }
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      enabled: true,
+      source: "meteofrance-radar",
+      fetchedAt,
+      message: error.message,
+      diagnostics: {
+        configured: true,
+        tokenOk: true,
+        catalogOk: false,
+        catalogEndpoint: METEOFRANCE_RADAR_CATALOG_URL,
+        userAgentSent: !!getMeteoFranceUserAgent(env)
+      }
+    };
+  }
+}
+
 export async function fetchRainViewerRadar({ latitude, longitude, enabled = true }) {
   if (!enabled) {
     return {
@@ -110,10 +187,7 @@ export async function fetchRainViewerRadar({ latitude, longitude, enabled = true
 async function obtainMeteoFranceAccessToken(env) {
   const response = await fetch(METEOFRANCE_TOKEN_URL, {
     method: "POST",
-    headers: {
-      "authorization": `Basic ${env.METEOFRANCE_APPLICATION_ID}`,
-      "content-type": "application/x-www-form-urlencoded"
-    },
+    headers: buildMeteoFranceTokenHeaders(env),
     body: "grant_type=client_credentials"
   });
 
@@ -178,6 +252,34 @@ function fetchWithBearer(url, accessToken, options = {}) {
       "authorization": `Bearer ${accessToken}`
     }
   });
+}
+
+function buildMeteoFranceTokenHeaders(env) {
+  const headers = {
+    "accept": "application/json",
+    "authorization": `Basic ${env.METEOFRANCE_APPLICATION_ID}`,
+    "cache-control": "no-cache",
+    "content-type": "application/x-www-form-urlencoded"
+  };
+  const userAgent = getMeteoFranceUserAgent(env);
+
+  if (userAgent) {
+    headers["user-agent"] = userAgent;
+  }
+
+  return headers;
+}
+
+function getMeteoFranceUserAgent(env) {
+  return sanitizeHeaderText(env.METEOFRANCE_USER_AGENT || env.METNO_USER_AGENT || METEOFRANCE_TOKEN_USER_AGENT_FALLBACK);
+}
+
+function sanitizeHeaderText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]/g, "")
+    .trim();
 }
 
 async function readMeteoFranceJsonResponse(response, url, label) {

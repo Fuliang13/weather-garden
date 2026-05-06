@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchMeteoFranceRadar } from "../src/sources/meteofrance.js";
+import { debugMeteoFranceRadar, fetchMeteoFranceRadar } from "../src/sources/meteofrance.js";
 
 const catalogPayload = {
   links: [
@@ -77,15 +77,19 @@ describe("Meteo-France radar source", () => {
 
     const radar = await fetchMeteoFranceRadar({
       env: {
-        METEOFRANCE_APPLICATION_ID: "application-id"
+        METEOFRANCE_APPLICATION_ID: "application-id",
+        METNO_USER_AGENT: "weather-garden/0.1 contact@example.com"
       }
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "https://portail-api.meteofrance.fr/token", {
       method: "POST",
       headers: {
+        accept: "application/json",
         authorization: "Basic application-id",
-        "content-type": "application/x-www-form-urlencoded"
+        "cache-control": "no-cache",
+        "content-type": "application/x-www-form-urlencoded",
+        "user-agent": "weather-garden/0.1 contact@example.com"
       },
       body: "grant_type=client_credentials"
     });
@@ -134,6 +138,38 @@ describe("Meteo-France radar source", () => {
     expect(radar.ok).toBe(true);
     expect(JSON.stringify(radar)).not.toContain("application-id");
     expect(JSON.stringify(radar)).not.toContain("fresh-token");
+  });
+
+  it("reports token rejections through the safe debug endpoint", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("<html><head><title>Request Rejected</title></head></html>", {
+        status: 200,
+        headers: {
+          "content-type": "text/html; charset=utf-8"
+        }
+      }));
+
+    const debug = await debugMeteoFranceRadar({
+      env: {
+        METEOFRANCE_APPLICATION_ID: "application-id",
+        METNO_USER_AGENT: "Météo Garden/0.1 contact@example.com"
+      }
+    });
+
+    expect(debug).toMatchObject({
+      ok: false,
+      enabled: true,
+      source: "meteofrance-radar",
+      diagnostics: {
+        configured: true,
+        tokenOk: false,
+        catalogOk: false,
+        userAgentSent: true
+      }
+    });
+    expect(debug.message).toContain("instead of JSON");
+    expect(fetchMock.mock.calls[0][1].headers["user-agent"]).toBe("Meteo Garden/0.1 contact@example.com");
+    expect(JSON.stringify(debug)).not.toContain("application-id");
   });
 
   it("reports non-JSON radar responses clearly", async () => {
