@@ -6,7 +6,7 @@ Mini app météo-jardin personnelle pour Louvigné-du-Désert.
 
 - Open-Meteo Météo-France AROME : prévision immédiate 15 min + horizons 30/60/120 min.
 - MET Norway Locationforecast : confirmation indépendante.
-- Météo-France radar : module prêt à brancher via `METEOFRANCE_RADAR_API_URL` + `METEOFRANCE_API_TOKEN`.
+- Météo-France radar : catalogue DPRadar via API Key JWT ou OAuth2.
 - RainViewer : fallback visuel radar, activé par défaut.
 - Ecowitt : structure prête pour station locale via `ECOWITT_API_URL` après validation du format réellement utilisé.
 - ntfy : notifications gratuites, optionnelles.
@@ -78,13 +78,21 @@ Dans l'app, active ntfy dans les réglages.
 
 Crée un compte sur le portail API Météo-France, puis souscris à l'API Données Radar.
 
-Configure ensuite le secret OAuth2 :
+Mode recommandé sur Cloudflare Worker : API Key JWT.
+
+```bash
+npx wrangler secret put METEOFRANCE_API_KEY
+```
+
+La valeur à saisir est le token API Key JWT généré sur le portail Météo-France. Le Worker l'envoie avec `Authorization: Bearer <METEOFRANCE_API_KEY>` pour appeler directement le catalogue DPRadar. Ce mode évite l'appel à `/token`, qui peut être rejeté par l'infrastructure Météo-France depuis Cloudflare Worker.
+
+Mode OAuth2 optionnel :
 
 ```bash
 npx wrangler secret put METEOFRANCE_APPLICATION_ID
 ```
 
-La valeur à saisir est la partie située après `Authorization: Basic` dans le cURL OAuth2 fourni par le portail Météo-France.
+La valeur à saisir est la partie située après `Authorization: Basic` dans le cURL OAuth2 fourni par le portail Météo-France. Le Worker appelle alors `/token` pour obtenir un access token, puis appelle DPRadar avec `Authorization: Bearer <accessToken>`. Ce mode fonctionne en local, mais peut recevoir une page HTML `Request Rejected` depuis Cloudflare Worker.
 
 Produit radar validé :
 

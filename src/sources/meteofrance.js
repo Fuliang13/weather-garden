@@ -4,34 +4,22 @@ const METEOFRANCE_RADAR_CATALOG_URL = "https://public-api.meteofrance.fr/public/
 const METEOFRANCE_RADAR_ZONE = "METROPOLE";
 const METEOFRANCE_RADAR_OBSERVATION = "LAME_D_EAU";
 const METEOFRANCE_TOKEN_USER_AGENT_FALLBACK = "weather-garden/0.1";
+const METEOFRANCE_REQUIRED_SECRETS = ["METEOFRANCE_API_KEY", "METEOFRANCE_APPLICATION_ID"];
 
 export async function fetchMeteoFranceRadar({ env }) {
   const fetchedAt = new Date().toISOString();
+  const authMode = getMeteoFranceAuthMode(env);
 
-  if (!env.METEOFRANCE_APPLICATION_ID) {
-    return {
-      ok: false,
-      enabled: false,
-      source: "meteofrance-radar",
-      fetchedAt,
-      message: "METEOFRANCE_APPLICATION_ID is not configured yet.",
-      diagnostics: {
-        configured: false,
-        requiredSecrets: ["METEOFRANCE_APPLICATION_ID"]
-      }
-    };
+  if (!authMode) {
+    return buildMeteoFranceMissingConfigResponse(fetchedAt, false);
   }
 
   const tokenState = {};
-  const catalog = await fetchMeteoFranceJsonWithOAuth(env, METEOFRANCE_RADAR_CATALOG_URL, tokenState);
-  const zoneUrl = requireMeteoFranceLink(catalog, (url) => trimTrailingSlash(url).endsWith(`/mosaiques/${METEOFRANCE_RADAR_ZONE}`), `${METEOFRANCE_RADAR_ZONE} zone`);
-  const zoneMetadata = await fetchMeteoFranceJsonWithOAuth(env, zoneUrl, tokenState);
-  const observationsUrl = requireMeteoFranceLink(zoneMetadata, (url) => trimTrailingSlash(url).endsWith(`/mosaiques/${METEOFRANCE_RADAR_ZONE}/observations`), `${METEOFRANCE_RADAR_ZONE} observations`);
-  const observations = await fetchMeteoFranceJsonWithOAuth(env, observationsUrl, tokenState);
-  const observationUrl = requireMeteoFranceLink(observations, (url) => trimTrailingSlash(url).endsWith(`/observations/${METEOFRANCE_RADAR_OBSERVATION}`), `${METEOFRANCE_RADAR_OBSERVATION} observation`);
-  const metadata = await fetchMeteoFranceJsonWithOAuth(env, observationUrl, tokenState);
-  const productUrl = findMeteoFranceProductUrl(metadata, 1000);
-  const mesh500ProductUrl = findMeteoFranceProductUrl(metadata, 500);
+  const fetchJson = authMode === "api-key"
+    ? (url) => fetchMeteoFranceJsonWithApiKey(env, url)
+    : (url) => fetchMeteoFranceJsonWithOAuth(env, url, tokenState);
+  const radarMetadata = await fetchMeteoFranceRadarMetadata(fetchJson);
+  const { metadata, productUrl, mesh500ProductUrl, zoneUrl, observationsUrl, observationUrl } = radarMetadata;
 
   return {
     ok: !!productUrl,
@@ -55,6 +43,7 @@ export async function fetchMeteoFranceRadar({ env }) {
     },
     diagnostics: {
       configured: true,
+      authMode,
       catalogEndpoint: METEOFRANCE_RADAR_CATALOG_URL,
       zoneEndpoint: zoneUrl,
       observationsEndpoint: observationsUrl,
@@ -66,21 +55,47 @@ export async function fetchMeteoFranceRadar({ env }) {
 
 export async function debugMeteoFranceRadar({ env }) {
   const fetchedAt = new Date().toISOString();
+  const authMode = getMeteoFranceAuthMode(env);
 
-  if (!env.METEOFRANCE_APPLICATION_ID) {
-    return {
-      ok: false,
-      enabled: false,
-      source: "meteofrance-radar",
-      fetchedAt,
-      message: "METEOFRANCE_APPLICATION_ID is not configured yet.",
-      diagnostics: {
-        configured: false,
-        tokenOk: false,
-        catalogOk: false,
-        requiredSecrets: ["METEOFRANCE_APPLICATION_ID"]
-      }
-    };
+  if (!authMode) {
+    return buildMeteoFranceMissingConfigResponse(fetchedAt, true);
+  }
+
+  if (authMode === "api-key") {
+    try {
+      const catalog = await fetchMeteoFranceJsonWithApiKey(env, METEOFRANCE_RADAR_CATALOG_URL);
+
+      return {
+        ok: true,
+        enabled: true,
+        source: "meteofrance-radar",
+        fetchedAt,
+        message: "Météo-France API key and radar catalog OK.",
+        diagnostics: {
+          configured: true,
+          authMode,
+          tokenOk: null,
+          catalogOk: true,
+          catalogEndpoint: METEOFRANCE_RADAR_CATALOG_URL,
+          catalogLinkCount: collectUrls(catalog).length
+        }
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        enabled: true,
+        source: "meteofrance-radar",
+        fetchedAt,
+        message: error.message,
+        diagnostics: {
+          configured: true,
+          authMode,
+          tokenOk: null,
+          catalogOk: false,
+          catalogEndpoint: METEOFRANCE_RADAR_CATALOG_URL
+        }
+      };
+    }
   }
 
   const tokenState = {};
@@ -96,9 +111,11 @@ export async function debugMeteoFranceRadar({ env }) {
       message: error.message,
       diagnostics: {
         configured: true,
+        authMode,
         tokenOk: false,
         catalogOk: false,
         tokenEndpoint: METEOFRANCE_TOKEN_URL,
+        catalogEndpoint: METEOFRANCE_RADAR_CATALOG_URL,
         userAgentSent: !!getMeteoFranceUserAgent(env)
       }
     };
@@ -115,6 +132,7 @@ export async function debugMeteoFranceRadar({ env }) {
       message: "Météo-France token and radar catalog OK.",
       diagnostics: {
         configured: true,
+        authMode,
         tokenOk: true,
         catalogOk: true,
         catalogEndpoint: METEOFRANCE_RADAR_CATALOG_URL,
@@ -131,6 +149,7 @@ export async function debugMeteoFranceRadar({ env }) {
       message: error.message,
       diagnostics: {
         configured: true,
+        authMode,
         tokenOk: true,
         catalogOk: false,
         catalogEndpoint: METEOFRANCE_RADAR_CATALOG_URL,
@@ -184,6 +203,57 @@ export async function fetchRainViewerRadar({ latitude, longitude, enabled = true
   };
 }
 
+async function fetchMeteoFranceRadarMetadata(fetchJson) {
+  const catalog = await fetchJson(METEOFRANCE_RADAR_CATALOG_URL);
+  const zoneUrl = requireMeteoFranceLink(catalog, (url) => trimTrailingSlash(url).endsWith(`/mosaiques/${METEOFRANCE_RADAR_ZONE}`), `${METEOFRANCE_RADAR_ZONE} zone`);
+  const zoneMetadata = await fetchJson(zoneUrl);
+  const observationsUrl = requireMeteoFranceLink(zoneMetadata, (url) => trimTrailingSlash(url).endsWith(`/mosaiques/${METEOFRANCE_RADAR_ZONE}/observations`), `${METEOFRANCE_RADAR_ZONE} observations`);
+  const observations = await fetchJson(observationsUrl);
+  const observationUrl = requireMeteoFranceLink(observations, (url) => trimTrailingSlash(url).endsWith(`/observations/${METEOFRANCE_RADAR_OBSERVATION}`), `${METEOFRANCE_RADAR_OBSERVATION} observation`);
+  const metadata = await fetchJson(observationUrl);
+
+  return {
+    metadata,
+    productUrl: findMeteoFranceProductUrl(metadata, 1000),
+    mesh500ProductUrl: findMeteoFranceProductUrl(metadata, 500),
+    zoneUrl,
+    observationsUrl,
+    observationUrl
+  };
+}
+
+function buildMeteoFranceMissingConfigResponse(fetchedAt, includeDebugDiagnostics) {
+  return {
+    ok: false,
+    enabled: false,
+    source: "meteofrance-radar",
+    fetchedAt,
+    message: "METEOFRANCE_API_KEY or METEOFRANCE_APPLICATION_ID is not configured yet.",
+    diagnostics: {
+      configured: false,
+      authMode: null,
+      ...(includeDebugDiagnostics ? {
+        tokenOk: null,
+        catalogOk: false,
+        catalogEndpoint: METEOFRANCE_RADAR_CATALOG_URL
+      } : {}),
+      requiredSecrets: METEOFRANCE_REQUIRED_SECRETS
+    }
+  };
+}
+
+function getMeteoFranceAuthMode(env) {
+  if (env.METEOFRANCE_API_KEY) {
+    return "api-key";
+  }
+
+  if (env.METEOFRANCE_APPLICATION_ID) {
+    return "oauth2";
+  }
+
+  return null;
+}
+
 async function obtainMeteoFranceAccessToken(env) {
   const response = await fetch(METEOFRANCE_TOKEN_URL, {
     method: "POST",
@@ -203,6 +273,20 @@ async function obtainMeteoFranceAccessToken(env) {
   }
 
   return token;
+}
+
+async function fetchMeteoFranceJsonWithApiKey(env, url) {
+  const response = await fetchWithBearer(url, env.METEOFRANCE_API_KEY, {
+    headers: {
+      "accept": "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(await buildMeteoFranceHttpError(response, url, "Météo-France radar"));
+  }
+
+  return readMeteoFranceJsonResponse(response, url, "Météo-France radar");
 }
 
 async function fetchMeteoFranceJsonWithOAuth(env, url, tokenState = {}) {

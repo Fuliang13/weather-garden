@@ -37,6 +37,8 @@ const metadataPayload = {
   ]
 };
 
+const radarProductUrl = "https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU/produit?maille=1000";
+
 describe("Meteo-France radar source", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -48,7 +50,7 @@ describe("Meteo-France radar source", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns a non-blocking disabled source when the OAuth application id is missing", async () => {
+  it("returns a non-blocking disabled source when no Meteo-France secret is configured", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
 
     const radar = await fetchMeteoFranceRadar({ env: {} });
@@ -59,12 +61,55 @@ describe("Meteo-France radar source", () => {
       enabled: false,
       source: "meteofrance-radar",
       fetchedAt: "2026-05-06T18:00:00.000Z",
-      message: "METEOFRANCE_APPLICATION_ID is not configured yet.",
+      message: "METEOFRANCE_API_KEY or METEOFRANCE_APPLICATION_ID is not configured yet.",
       diagnostics: {
         configured: false,
-        requiredSecrets: ["METEOFRANCE_APPLICATION_ID"]
+        authMode: null,
+        requiredSecrets: ["METEOFRANCE_API_KEY", "METEOFRANCE_APPLICATION_ID"]
       }
     });
+  });
+
+  it("uses the API key directly and follows DPRadar links to the 1000 m product", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(catalogPayload))
+      .mockResolvedValueOnce(jsonResponse(zonePayload))
+      .mockResolvedValueOnce(jsonResponse(observationsPayload))
+      .mockResolvedValueOnce(jsonResponse(metadataPayload));
+
+    const radar = await fetchMeteoFranceRadar({
+      env: {
+        METEOFRANCE_API_KEY: "api-key-token",
+        METEOFRANCE_APPLICATION_ID: "application-id"
+      }
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls.some(([url]) => url === "https://portail-api.meteofrance.fr/token")).toBe(false);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques");
+    expect(fetchMock.mock.calls[0][1].headers.authorization).toBe("Bearer api-key-token");
+    expect(fetchMock.mock.calls[3][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU");
+    expect(fetchMock.mock.calls[3][1].headers.authorization).toBe("Bearer api-key-token");
+    expect(radar).toMatchObject({
+      ok: true,
+      enabled: true,
+      source: "meteofrance-radar",
+      validityTime: "2026-05-06T16:35:00.000Z",
+      observation: "LAME_D_EAU",
+      zone: "METROPOLE",
+      mesh: 1000,
+      productUrl: radarProductUrl,
+      format: "gzip-bufr",
+      score: null,
+      precipitationMm: null,
+      probability: null,
+      diagnostics: {
+        configured: true,
+        authMode: "api-key"
+      }
+    });
+    expect(JSON.stringify(radar)).not.toContain("api-key-token");
+    expect(JSON.stringify(radar)).not.toContain("application-id");
   });
 
   it("gets an OAuth2 token and follows DPRadar links to the 1000 m product", async () => {
@@ -105,11 +150,15 @@ describe("Meteo-France radar source", () => {
       observation: "LAME_D_EAU",
       zone: "METROPOLE",
       mesh: 1000,
-      productUrl: "https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU/produit?maille=1000",
+      productUrl: radarProductUrl,
       format: "gzip-bufr",
       score: null,
       precipitationMm: null,
-      probability: null
+      probability: null,
+      diagnostics: {
+        configured: true,
+        authMode: "oauth2"
+      }
     });
     expect(JSON.stringify(radar)).not.toContain("application-id");
     expect(JSON.stringify(radar)).not.toContain("access-token-1");
@@ -140,6 +189,35 @@ describe("Meteo-France radar source", () => {
     expect(JSON.stringify(radar)).not.toContain("fresh-token");
   });
 
+  it("reports API key catalog diagnostics without exposing the secret", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(catalogPayload));
+
+    const debug = await debugMeteoFranceRadar({
+      env: {
+        METEOFRANCE_API_KEY: "api-key-token"
+      }
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques");
+    expect(fetchMock.mock.calls[0][1].headers.authorization).toBe("Bearer api-key-token");
+    expect(debug).toMatchObject({
+      ok: true,
+      enabled: true,
+      source: "meteofrance-radar",
+      message: "Météo-France API key and radar catalog OK.",
+      diagnostics: {
+        configured: true,
+        authMode: "api-key",
+        tokenOk: null,
+        catalogOk: true,
+        catalogEndpoint: "https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques"
+      }
+    });
+    expect(JSON.stringify(debug)).not.toContain("api-key-token");
+  });
+
   it("reports token rejections through the safe debug endpoint", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response("<html><head><title>Request Rejected</title></head></html>", {
@@ -162,6 +240,7 @@ describe("Meteo-France radar source", () => {
       source: "meteofrance-radar",
       diagnostics: {
         configured: true,
+        authMode: "oauth2",
         tokenOk: false,
         catalogOk: false,
         userAgentSent: true
