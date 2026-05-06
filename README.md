@@ -84,7 +84,7 @@ Mode recommandé sur Cloudflare Worker : API Key JWT.
 npx wrangler secret put METEOFRANCE_API_KEY
 ```
 
-La valeur à saisir est le token API Key JWT généré sur le portail Météo-France. Le Worker l'envoie avec `Authorization: Bearer <METEOFRANCE_API_KEY>` pour appeler directement le catalogue DPRadar. Ce mode évite l'appel à `/token`, qui peut être rejeté par l'infrastructure Météo-France depuis Cloudflare Worker.
+La valeur à saisir est le token API Key JWT généré sur le portail Météo-France. Le Worker l'envoie avec le header `apikey: <METEOFRANCE_API_KEY>` pour appeler directement le catalogue DPRadar. Ce mode évite l'appel à `/token`, qui peut être rejeté par l'infrastructure Météo-France depuis Cloudflare Worker.
 
 Mode OAuth2 optionnel :
 

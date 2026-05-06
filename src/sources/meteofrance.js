@@ -519,7 +519,7 @@ async function obtainMeteoFranceAccessToken(env) {
 }
 
 async function fetchMeteoFranceJsonWithApiKey(env, url) {
-  const response = await fetchWithBearer(url, env.METEOFRANCE_API_KEY, {
+  const response = await fetchWithApiKey(url, env.METEOFRANCE_API_KEY, {
     headers: {
       "accept": "application/json"
     }
@@ -547,7 +547,7 @@ async function fetchMeteoFranceJsonWithOAuth(env, url, tokenState = {}) {
 }
 
 async function fetchMeteoFranceBinaryWithApiKey(env, url) {
-  return fetchWithBearer(url, env.METEOFRANCE_API_KEY, {
+  return fetchWithApiKey(url, env.METEOFRANCE_API_KEY, {
     headers: {
       "accept": "application/x-hdf5, application/octet-stream, */*"
     }
@@ -585,6 +585,16 @@ async function fetchMeteoFranceWithOAuth(env, url, options = {}, tokenState = {}
 
   tokenState.accessToken = await obtainMeteoFranceAccessToken(env);
   return fetchWithBearer(url, tokenState.accessToken, options);
+}
+
+function fetchWithApiKey(url, apiKey, options = {}) {
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      "apikey": apiKey
+    }
+  });
 }
 
 function fetchWithBearer(url, accessToken, options = {}) {

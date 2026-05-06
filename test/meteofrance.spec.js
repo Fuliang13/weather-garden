@@ -99,11 +99,14 @@ describe("Meteo-France radar source", () => {
     expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(fetchMock.mock.calls.some(([url]) => url === "https://portail-api.meteofrance.fr/token")).toBe(false);
     expect(fetchMock.mock.calls[0][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques");
-    expect(fetchMock.mock.calls[0][1].headers.authorization).toBe("Bearer api-key-token");
+    expect(fetchMock.mock.calls[0][1].headers.apikey).toBe("api-key-token");
+    expect(fetchMock.mock.calls[0][1].headers.authorization).toBeUndefined();
     expect(fetchMock.mock.calls[3][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU");
-    expect(fetchMock.mock.calls[3][1].headers.authorization).toBe("Bearer api-key-token");
+    expect(fetchMock.mock.calls[3][1].headers.apikey).toBe("api-key-token");
+    expect(fetchMock.mock.calls[3][1].headers.authorization).toBeUndefined();
     expect(fetchMock.mock.calls[4][0]).toContain("maille=500");
-    expect(fetchMock.mock.calls[4][1].headers.authorization).toBe("Bearer api-key-token");
+    expect(fetchMock.mock.calls[4][1].headers.apikey).toBe("api-key-token");
+    expect(fetchMock.mock.calls[4][1].headers.authorization).toBeUndefined();
     expect(radar).toMatchObject({
       ok: true,
       enabled: true,
@@ -313,7 +316,8 @@ describe("Meteo-France radar source", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe("https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques");
-    expect(fetchMock.mock.calls[0][1].headers.authorization).toBe("Bearer api-key-token");
+    expect(fetchMock.mock.calls[0][1].headers.apikey).toBe("api-key-token");
+    expect(fetchMock.mock.calls[0][1].headers.authorization).toBeUndefined();
     expect(debug).toMatchObject({
       ok: true,
       enabled: true,
