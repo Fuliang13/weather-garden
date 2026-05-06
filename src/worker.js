@@ -253,13 +253,10 @@ async function storeGardenState(env, gardenState) {
 }
 
 function sanitizePublicSettings(settings = {}) {
-  const safeSettings = { ...settings };
-  delete safeSettings.ntfyTopic;
+	const safeSettings = mergeSettings(settings);
+	delete safeSettings.ntfyTopic;
 
-  return mergeSettings({
-    ...safeSettings,
-    ntfyTopic: ""
-  });
+	return safeSettings;
 }
 
 function loadLocation(env) {
