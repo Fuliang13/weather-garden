@@ -48,7 +48,7 @@ const metadataWithoutHdf5Payload = {
 
 const radarHdf5ProductUrl = "https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU/produit?maille=500";
 const radarBufrProductUrl = "https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU/produit?maille=1000";
-const hdf5Signature = new Uint8Array([0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+const hdf5Fixture = buildMinimalHdf5Fixture();
 
 describe("Meteo-France radar source", () => {
   beforeEach(() => {
@@ -87,7 +87,7 @@ describe("Meteo-France radar source", () => {
       .mockResolvedValueOnce(jsonResponse(zonePayload))
       .mockResolvedValueOnce(jsonResponse(observationsPayload))
       .mockResolvedValueOnce(jsonResponse(metadataPayload))
-      .mockResolvedValueOnce(binaryResponse(hdf5Signature));
+      .mockResolvedValueOnce(binaryResponse(hdf5Fixture));
 
     const radar = await fetchMeteoFranceRadar({
       env: {
@@ -133,13 +133,27 @@ describe("Meteo-France radar source", () => {
         hdf5: {
           downloadOk: true,
           signatureOk: true,
-          parsingOk: false,
-          parser: "not-implemented"
+          parsingOk: true,
+          parser: "worker-safe-hdf5-structure-parser-v1",
+          canDecodeGrid: false,
+          expectedDimensions: {
+            width: 3472,
+            height: 3472
+          },
+          dimensions: [3472, 3472],
+          unit: "centiemes de mm",
+          scaleFactor: 0.01,
+          missingValue: 65535
         },
         nativeLayerAvailable: false
       }
     });
     expect(radar.message).toContain("HDF5 500 m product is available");
+    expect(radar.diagnostics.hdf5.datasets.map((dataset) => dataset.name)).toEqual(["data1", "quality1"]);
+    expect(radar.diagnostics.hdf5.radarDataset.name).toBe("data1");
+    expect(radar.diagnostics.hdf5.quality.name).toBe("quality1");
+    expect(radar.diagnostics.hdf5.projection).toMatchObject({ value: "EPSG:2154" });
+    expect(radar.diagnostics.hdf5.bounds).toEqual([[48.1, -1.5], [48.9, -0.7]]);
     expect(JSON.stringify(radar)).not.toContain("api-key-token");
     expect(JSON.stringify(radar)).not.toContain("application-id");
     expect(JSON.stringify(radar)).not.toContain("secret-product-token");
@@ -152,7 +166,7 @@ describe("Meteo-France radar source", () => {
       .mockResolvedValueOnce(jsonResponse(zonePayload))
       .mockResolvedValueOnce(jsonResponse(observationsPayload))
       .mockResolvedValueOnce(jsonResponse(metadataPayload))
-      .mockResolvedValueOnce(binaryResponse(hdf5Signature));
+      .mockResolvedValueOnce(binaryResponse(hdf5Fixture));
 
     const radar = await fetchMeteoFranceRadar({
       env: {
@@ -212,7 +226,7 @@ describe("Meteo-France radar source", () => {
       .mockResolvedValueOnce(jsonResponse(zonePayload))
       .mockResolvedValueOnce(jsonResponse(observationsPayload))
       .mockResolvedValueOnce(jsonResponse(metadataPayload))
-      .mockResolvedValueOnce(binaryResponse(hdf5Signature));
+      .mockResolvedValueOnce(binaryResponse(hdf5Fixture));
 
     const radar = await fetchMeteoFranceRadar({
       env: {
@@ -304,6 +318,34 @@ describe("Meteo-France radar source", () => {
     expect(JSON.stringify(radar)).not.toContain("secret-product-token");
   });
 
+  it("sanitizes failed HDF5 download diagnostics before returning public payloads", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(catalogPayload))
+      .mockResolvedValueOnce(jsonResponse(zonePayload))
+      .mockResolvedValueOnce(jsonResponse(observationsPayload))
+      .mockResolvedValueOnce(jsonResponse(metadataPayload))
+      .mockResolvedValueOnce(new Response("Forbidden https://public-api.meteofrance.fr/public/DPRadar/mosaiques/METROPOLE/observations/LAME_D_EAU/produit?maille=500&token=secret-product-token", {
+        status: 403,
+        headers: {
+          "content-type": "text/plain"
+        }
+      }));
+
+    const radar = await fetchMeteoFranceRadar({
+      env: {
+        METEOFRANCE_API_KEY: "api-key-token"
+      }
+    });
+
+    const serialized = JSON.stringify(radar);
+
+    expect(radar.diagnostics.hdf5.downloadOk).toBe(false);
+    expect(radar.diagnostics.hdf5.error).toContain("maille=500");
+    expect(serialized).not.toContain("api-key-token");
+    expect(serialized).not.toContain("secret-product-token");
+    expect(serialized).not.toContain("token=secret");
+  });
+
   it("reports API key catalog diagnostics without following suspended child endpoints", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse(catalogPayload));
@@ -342,7 +384,7 @@ describe("Meteo-France radar source", () => {
       .mockResolvedValueOnce(jsonResponse(zonePayload))
       .mockResolvedValueOnce(jsonResponse(observationsPayload))
       .mockResolvedValueOnce(jsonResponse(metadataPayload))
-      .mockResolvedValueOnce(binaryResponse(hdf5Signature));
+      .mockResolvedValueOnce(binaryResponse(hdf5Fixture));
 
     const debug = await debugMeteoFranceHdf5({
       env: {
@@ -364,14 +406,23 @@ describe("Meteo-France radar source", () => {
         hdf5: {
           downloadOk: true,
           signatureOk: true,
-          parsingOk: false,
-          datasets: [],
-          dimensions: null,
-          projection: null,
-          bounds: null
+          parsingOk: true,
+          dimensions: [3472, 3472],
+          projection: {
+            source: "/data1",
+            value: "EPSG:2154"
+          },
+          bounds: [[48.1, -1.5], [48.9, -0.7]],
+          expectedDimensions: {
+            width: 3472,
+            height: 3472
+          },
+          canDecodeGrid: false
         },
         nativeLayerAvailable: false,
         frameLimit: 24,
+        nativeFrameCount: 0,
+        storedFrameCount: 0,
         frameCount: 0
       }
     });
@@ -429,6 +480,294 @@ describe("Meteo-France radar source", () => {
     })).rejects.toThrow("instead of JSON");
   });
 });
+
+
+function buildMinimalHdf5Fixture() {
+  const bytes = new Uint8Array(8192);
+  const view = new DataView(bytes.buffer);
+  const rootHeaderAddress = 200;
+  const btreeAddress = 512;
+  const heapAddress = 800;
+  const heapDataAddress = 900;
+  const dataHeaderAddress = 1024;
+  const qualityHeaderAddress = 3000;
+
+  writeBytes(bytes, 0, [0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a]);
+  bytes[8] = 0;
+  bytes[13] = 8;
+  bytes[14] = 8;
+  writeU16(view, 16, 4);
+  writeU16(view, 18, 16);
+  writeU64(view, 24, 0);
+  writeU64(view, 32, undefinedAddress());
+  writeU64(view, 40, bytes.byteLength);
+  writeU64(view, 48, undefinedAddress());
+  writeSymbolTableEntry(view, 56, { nameOffset: 0, objectHeaderAddress: rootHeaderAddress, cacheType: 1, btreeAddress, heapAddress });
+
+  writeObjectHeader(bytes, view, rootHeaderAddress, [
+    { type: 17, data: buildSymbolTableMessage(btreeAddress, heapAddress) }
+  ]);
+
+  const heapData = buildHeapData(["", "data1", "quality1"]);
+  writeBytes(bytes, heapDataAddress, heapData.bytes);
+  writeLocalHeap(bytes, view, heapAddress, heapData.bytes.length, heapDataAddress);
+
+  writeBtreeLeaf(bytes, view, btreeAddress, [
+    { nameOffset: heapData.offsets.data1, objectHeaderAddress: dataHeaderAddress },
+    { nameOffset: heapData.offsets.quality1, objectHeaderAddress: qualityHeaderAddress }
+  ]);
+
+  writeDatasetHeader(bytes, view, dataHeaderAddress, {
+    dimensions: [3472, 3472],
+    typeSize: 2,
+    chunkDimensions: [512, 512],
+    attributes: [
+      stringAttribute("units", "centiemes de mm"),
+      float64Attribute("scale_factor", 0.01),
+      uint32Attribute("missing_value", 65535),
+      stringAttribute("projection", "EPSG:2154"),
+      float64Attribute("geospatial_lat_min", 48.1),
+      float64Attribute("geospatial_lat_max", 48.9),
+      float64Attribute("geospatial_lon_min", -1.5),
+      float64Attribute("geospatial_lon_max", -0.7)
+    ]
+  });
+
+  writeDatasetHeader(bytes, view, qualityHeaderAddress, {
+    dimensions: [3472, 3472],
+    typeSize: 1,
+    chunkDimensions: [512, 512],
+    attributes: [
+      stringAttribute("units", "percent")
+    ]
+  });
+
+  return bytes;
+}
+
+function writeDatasetHeader(bytes, view, address, { dimensions, typeSize, chunkDimensions, attributes }) {
+  writeObjectHeader(bytes, view, address, [
+    { type: 1, data: buildDataspaceMessage(dimensions) },
+    { type: 3, data: buildFixedPointDatatypeMessage(typeSize) },
+    { type: 8, data: buildChunkedLayoutMessage(chunkDimensions, typeSize) },
+    { type: 11, data: buildDeflateFilterMessage() },
+    ...attributes.map((attribute) => ({ type: 12, data: attribute }))
+  ]);
+}
+
+function buildDataspaceMessage(dimensions) {
+  const bytes = new Uint8Array(8 + dimensions.length * 8);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 1;
+  bytes[1] = dimensions.length;
+  dimensions.forEach((dimension, index) => writeU64(view, 8 + index * 8, dimension));
+  return bytes;
+}
+
+function buildFixedPointDatatypeMessage(size) {
+  const bytes = new Uint8Array(8);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 0;
+  writeU32(view, 4, size);
+  return bytes;
+}
+
+function buildFloat64DatatypeMessage() {
+  const bytes = new Uint8Array(8);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 1;
+  writeU32(view, 4, 8);
+  return bytes;
+}
+
+function buildStringDatatypeMessage(size) {
+  const bytes = new Uint8Array(8);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 3;
+  writeU32(view, 4, size);
+  return bytes;
+}
+
+function buildScalarDataspaceMessage() {
+  const bytes = new Uint8Array(8);
+  bytes[0] = 1;
+  bytes[1] = 0;
+  return bytes;
+}
+
+function buildChunkedLayoutMessage(chunkDimensions, elementSize) {
+  const bytes = new Uint8Array(3 + 8 + chunkDimensions.length * 4 + 4);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 3;
+  bytes[1] = 2;
+  bytes[2] = chunkDimensions.length;
+  writeU64(view, 3, 2048);
+  chunkDimensions.forEach((dimension, index) => writeU32(view, 11 + index * 4, dimension));
+  writeU32(view, 11 + chunkDimensions.length * 4, elementSize);
+  return bytes;
+}
+
+function buildDeflateFilterMessage() {
+  const bytes = new Uint8Array(24);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 1;
+  bytes[1] = 1;
+  writeU16(view, 8, 1);
+  writeU16(view, 14, 1);
+  writeU32(view, 16, 6);
+  return bytes;
+}
+
+function stringAttribute(name, value) {
+  return buildAttributeMessage(name, buildStringDatatypeMessage(value.length), buildScalarDataspaceMessage(), asciiBytes(value));
+}
+
+function float64Attribute(name, value) {
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setFloat64(0, value, true);
+  return buildAttributeMessage(name, buildFloat64DatatypeMessage(), buildScalarDataspaceMessage(), bytes);
+}
+
+function uint32Attribute(name, value) {
+  const bytes = new Uint8Array(4);
+  writeU32(new DataView(bytes.buffer), 0, value);
+  return buildAttributeMessage(name, buildFixedPointDatatypeMessage(4), buildScalarDataspaceMessage(), bytes);
+}
+
+function buildAttributeMessage(name, datatype, dataspace, value) {
+  const nameBytes = new Uint8Array([...asciiBytes(name), 0]);
+  const size = 8 + align8(nameBytes.length) + align8(datatype.length) + align8(dataspace.length) + value.length;
+  const bytes = new Uint8Array(size);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 1;
+  writeU16(view, 2, nameBytes.length);
+  writeU16(view, 4, datatype.length);
+  writeU16(view, 6, dataspace.length);
+  let cursor = 8;
+  writeBytes(bytes, cursor, nameBytes);
+  cursor = align8(cursor + nameBytes.length);
+  writeBytes(bytes, cursor, datatype);
+  cursor = align8(cursor + datatype.length);
+  writeBytes(bytes, cursor, dataspace);
+  cursor = align8(cursor + dataspace.length);
+  writeBytes(bytes, cursor, value);
+  return bytes;
+}
+
+function buildSymbolTableMessage(btreeAddress, heapAddress) {
+  const bytes = new Uint8Array(16);
+  const view = new DataView(bytes.buffer);
+  writeU64(view, 0, btreeAddress);
+  writeU64(view, 8, heapAddress);
+  return bytes;
+}
+
+function writeObjectHeader(bytes, view, address, messages) {
+  let headerSize = 0;
+  messages.forEach((message) => {
+    headerSize += 8 + align8(message.data.length);
+  });
+
+  bytes[address] = 1;
+  writeU16(view, address + 2, messages.length);
+  writeU32(view, address + 4, 1);
+  writeU32(view, address + 8, headerSize);
+  let cursor = address + 12;
+
+  messages.forEach((message) => {
+    writeU16(view, cursor, message.type);
+    writeU16(view, cursor + 2, message.data.length);
+    writeBytes(bytes, cursor + 8, message.data);
+    cursor = align8(cursor + 8 + message.data.length);
+  });
+}
+
+function writeLocalHeap(bytes, view, address, dataSegmentSize, dataSegmentAddress) {
+  writeBytes(bytes, address, asciiBytes("HEAP"));
+  bytes[address + 4] = 0;
+  writeU64(view, address + 8, dataSegmentSize);
+  writeU64(view, address + 16, undefinedAddress());
+  writeU64(view, address + 24, dataSegmentAddress);
+}
+
+function writeBtreeLeaf(bytes, view, address, entries) {
+  writeBytes(bytes, address, asciiBytes("TREE"));
+  bytes[address + 4] = 0;
+  bytes[address + 5] = 0;
+  writeU16(view, address + 6, entries.length);
+  writeU64(view, address + 8, undefinedAddress());
+  writeU64(view, address + 16, undefinedAddress());
+  let cursor = address + 24;
+
+  entries.forEach((entry) => {
+    writeU64(view, cursor, entry.nameOffset);
+    cursor += 8;
+    writeSymbolTableEntry(view, cursor, { nameOffset: entry.nameOffset, objectHeaderAddress: entry.objectHeaderAddress, cacheType: 0 });
+    cursor += 40;
+  });
+}
+
+function writeSymbolTableEntry(view, offset, { nameOffset, objectHeaderAddress, cacheType, btreeAddress = 0, heapAddress = 0 }) {
+  writeU64(view, offset, nameOffset);
+  writeU64(view, offset + 8, objectHeaderAddress);
+  writeU32(view, offset + 16, cacheType);
+
+  if (cacheType === 1) {
+    writeU64(view, offset + 24, btreeAddress);
+    writeU64(view, offset + 32, heapAddress);
+  }
+}
+
+function buildHeapData(names) {
+  const chunks = [];
+  const offsets = {};
+  let cursor = 0;
+
+  names.forEach((name) => {
+    offsets[name] = cursor;
+    const chunk = new Uint8Array([...asciiBytes(name), 0]);
+    chunks.push(chunk);
+    cursor += chunk.length;
+  });
+
+  const bytes = new Uint8Array(cursor);
+  let offset = 0;
+  chunks.forEach((chunk) => {
+    writeBytes(bytes, offset, chunk);
+    offset += chunk.length;
+  });
+
+  return { bytes, offsets };
+}
+
+function asciiBytes(value) {
+  return Uint8Array.from(String(value).split("").map((char) => char.charCodeAt(0)));
+}
+
+function writeBytes(bytes, offset, values) {
+  bytes.set(values, offset);
+}
+
+function writeU16(view, offset, value) {
+  view.setUint16(offset, value, true);
+}
+
+function writeU32(view, offset, value) {
+  view.setUint32(offset, value, true);
+}
+
+function writeU64(view, offset, value) {
+  const normalized = value === undefinedAddress() ? value : BigInt(value);
+  view.setBigUint64(offset, normalized, true);
+}
+
+function undefinedAddress() {
+  return 0xffffffffffffffffn;
+}
+
+function align8(value) {
+  return Math.ceil(value / 8) * 8;
+}
 
 function jsonResponse(value, init = {}) {
   return new Response(JSON.stringify(value), {
