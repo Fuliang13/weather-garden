@@ -9,7 +9,9 @@
 		"APP_LATITUDE": "48.47585833333334",
 		"APP_LONGITUDE": "-1.1030777777777777",
 		"APP_TIMEZONE": "Europe/Paris",
-		"METNO_USER_AGENT": "weather-garden/0.1 contact@example.com",
+		// MET Norway rejects missing, generic, or example User-Agent values with HTTP 403.
+		// Set a real contact before deploying, for example: "weather-garden/0.1 your.email@example.org".
+		"METNO_USER_AGENT": "flo.jacques@gmail.com",
 		"ECOWITT_STATION_LABEL": "Station locale",
 		"NTFY_SERVER": "https://ntfy.sh",
 		"ENABLE_NTFY": "true"

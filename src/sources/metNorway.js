@@ -1,14 +1,21 @@
 const MET_NORWAY_URL = "https://api.met.no/weatherapi/locationforecast/2.0/compact";
+const USER_AGENT_PLACEHOLDERS = [
+  "contact@example.com",
+  "support@example.com",
+  "ton.email@example.com",
+  "example.com"
+];
 
 export async function fetchMetNorway({ latitude, longitude, userAgent }) {
   const url = new URL(MET_NORWAY_URL);
   url.searchParams.set("lat", Number(latitude).toFixed(6));
   url.searchParams.set("lon", Number(longitude).toFixed(6));
+  const metNorwayUserAgent = normalizeMetNorwayUserAgent(userAgent);
 
   const response = await fetch(url.toString(), {
     headers: {
-      "accept": "application/json",
-      "user-agent": userAgent || "weather-garden/0.1 contact@example.com"
+      "Accept": "application/json",
+      "User-Agent": metNorwayUserAgent
     }
   });
 
@@ -25,6 +32,25 @@ export async function fetchMetNorway({ latitude, longitude, userAgent }) {
     url: url.toString(),
     timeseries: normalizeTimeseries(data.properties?.timeseries || [])
   };
+}
+
+export function normalizeMetNorwayUserAgent(userAgent) {
+  const value = String(userAgent || "").trim();
+  const lowerValue = value.toLowerCase();
+
+  if (
+    !value ||
+    !hasContactInfo(value) ||
+    USER_AGENT_PLACEHOLDERS.some((placeholder) => lowerValue.includes(placeholder))
+  ) {
+    throw new Error("MET Norway User-Agent is not configured. Set METNO_USER_AGENT to an identifiable value with a real email or website.");
+  }
+
+  return value;
+}
+
+function hasContactInfo(value) {
+  return /[^\s@]+@[^\s@]+\.[^\s@]+/.test(value) || /https?:\/\/[^\s)]+/i.test(value);
 }
 
 function normalizeTimeseries(timeseries) {

@@ -1,5 +1,6 @@
 # Optional Ecowitt adapter.
 # Keep this disabled until the actual Ecowitt Cloud payload or a normalized proxy endpoint is confirmed.
+METNO_USER_AGENT=weather-garden/0.1 your.email@example.org
 ECOWITT_API_URL=
 ECOWITT_API_TOKEN=
 ECOWITT_STATION_LABEL=Station locale

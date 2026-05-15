@@ -664,6 +664,276 @@ h2 {
   box-shadow: 0 0 0 2px rgba(58, 111, 120, 0.45), 0 6px 14px rgba(27, 38, 32, 0.24);
 }
 
+body[data-active-panel="garden"] .app-shell {
+  width: min(1500px, calc(100% - 3rem));
+}
+
+.garden-workspace {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  margin-top: 0;
+}
+
+.garden-header,
+.garden-map-card,
+.garden-detail-card,
+.garden-entities-sidebar {
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  padding: 1rem;
+}
+
+.garden-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.garden-header-main h2 {
+  margin-bottom: 0.25rem;
+  font-size: 1.6rem;
+}
+
+.garden-header-actions,
+.garden-map-toolbar,
+.garden-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.garden-status-badge {
+  width: fit-content;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--garden);
+  font-size: 0.8rem;
+  font-weight: 800;
+  padding: 0.35rem 0.6rem;
+  white-space: nowrap;
+}
+
+.garden-status-badge[data-state="dirty"],
+.garden-status-badge[data-state="saving"] {
+  color: #8a5a10;
+}
+
+.garden-status-badge[data-state="error"] {
+  color: var(--danger);
+}
+
+.garden-layout {
+  display: grid;
+  grid-template-columns: 372px minmax(760px, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.garden-entities-sidebar {
+  display: grid;
+  min-width: 0;
+  max-height: calc(100vh - 9rem);
+  overflow: hidden;
+}
+
+.garden-entities-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.garden-entities-header h3,
+.garden-map-card-header h3,
+.garden-detail-header h3 {
+  margin: 0 0 0.25rem;
+}
+
+.garden-entities-tools {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.85rem;
+}
+
+.garden-entity-search,
+.garden-entity-type-filter {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.7rem;
+  color: var(--text);
+}
+
+.garden-entity-count {
+  white-space: nowrap;
+}
+
+.garden-entity-list {
+  display: grid;
+  gap: 0.65rem;
+  overflow: auto;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.garden-entity-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--soft);
+  padding: 0.75rem;
+}
+
+.garden-entity-row--selected {
+  border-color: color-mix(in srgb, var(--garden) 60%, var(--border));
+  background: color-mix(in srgb, var(--soft) 45%, white);
+  outline: 2px solid color-mix(in srgb, var(--garden) 22%, transparent);
+}
+
+.garden-entity-row--no-position {
+  background: color-mix(in srgb, var(--soft) 52%, white);
+}
+
+.garden-entity-select {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.garden-entity-row-main {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.garden-entity-type-badge {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 999px;
+  background: var(--garden);
+}
+
+.garden-entity-geometry-badge {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 750;
+  padding: 0.25rem 0.45rem;
+}
+
+.garden-entity-row-actions {
+  display: flex;
+  align-items: center;
+}
+
+.garden-entity-center-button {
+  min-height: 2.25rem;
+  padding: 0.45rem 0.65rem;
+}
+
+.garden-main {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+}
+
+.garden-map-card {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.garden-map-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.garden-map-container {
+  min-width: 0;
+}
+
+.garden-map {
+  width: 100%;
+  height: 480px;
+  min-height: 380px;
+}
+
+.garden-detail-card {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.garden-detail-card--empty {
+  background: color-mix(in srgb, var(--soft) 35%, white);
+}
+
+.garden-detail-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.garden-detail-tab {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+}
+
+.garden-detail-tab--active {
+  border-color: color-mix(in srgb, var(--garden) 55%, var(--border));
+  background: var(--garden);
+  color: white;
+}
+
+.garden-detail-content {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.garden-detail-form[hidden] {
+  display: none;
+}
+
+.garden-detail-secondary {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.garden-detail-actions {
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+  padding-top: 0.85rem;
+}
+
+.garden-sensor-summary {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.garden-empty-state {
+  display: grid;
+  gap: 0.75rem;
+  color: var(--muted);
+}
+
+.garden-empty-state h3,
+.garden-empty-state h4 {
+  margin: 0;
+  color: var(--text);
+}
+
 .section-header {
   display: flex;
   align-items: flex-start;
@@ -933,12 +1203,50 @@ button.secondary,
 }
 
 @media (max-width: 1023px) {
-  .garden-actions {
+  body[data-active-panel="garden"] .app-shell {
+    width: min(100% - 2rem, 920px);
+  }
+
+  .garden-header {
+    flex-direction: column;
+  }
+
+  .garden-header-actions {
     justify-content: flex-start;
   }
 
-  .garden-workspace {
+  .garden-layout {
     grid-template-columns: 1fr;
+  }
+
+  .garden-main {
+    order: 1;
+  }
+
+  .garden-entities-sidebar {
+    order: 2;
+    max-height: none;
+  }
+
+  .garden-map-card {
+    order: 1;
+  }
+
+  .garden-detail-card {
+    order: 2;
+  }
+
+  .garden-map-card-header {
+    flex-direction: column;
+  }
+
+  .garden-map-toolbar {
+    justify-content: flex-start;
+  }
+
+  .garden-map {
+    height: 480px;
+    min-height: 380px;
   }
 }
 
@@ -1053,7 +1361,51 @@ button.secondary,
   }
 
   .garden-map {
-    min-height: 360px;
+    height: 42vh;
+    min-height: 300px;
+  }
+
+  .garden-header,
+  .garden-map-card,
+  .garden-detail-card,
+  .garden-entities-sidebar {
+    padding: 0.9rem;
+  }
+
+  .garden-header-actions,
+  .garden-map-toolbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .garden-header-actions button,
+  .garden-map-toolbar button,
+  .garden-detail-actions button {
+    min-height: 44px;
+    padding-inline: 0.7rem;
+  }
+
+  .garden-status-badge {
+    grid-column: 1 / -1;
+  }
+
+  .garden-entity-row,
+  .empty-row {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .garden-entity-select {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .garden-entity-geometry-badge {
+    width: fit-content;
+  }
+
+  .garden-detail-actions {
+    justify-content: stretch;
   }
 
   .metrics-wide,
@@ -1062,9 +1414,8 @@ button.secondary,
     grid-template-columns: 1fr;
   }
 
-  .garden-entity-row,
-  .empty-row {
-    align-items: stretch;
-    flex-direction: column;
+  .garden-detail-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Weather Garden</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="/style.css?v=20260515-wgf-ui">
+  <link rel="stylesheet" href="/style.css?v=20260515-garden-workspace">
 </head>
 <body>
   <main class="app-shell">
@@ -113,90 +113,131 @@
     </section>
 
     <section data-panel="garden" hidden>
-      <section class="card garden-workspace-card">
-        <div class="section-header">
-          <div>
-            <h2>Jardin</h2>
-            <p id="gardenWorkspaceStatus" class="muted">Chargement du jardin...</p>
+      <section class="garden-workspace" aria-labelledby="gardenWorkspaceTitle">
+        <header class="garden-header">
+          <div class="garden-header-main">
+            <p class="eyebrow">Jardin</p>
+            <h2 id="gardenWorkspaceTitle">Jardin</h2>
+            <p id="gardenWorkspaceStatus" class="muted">Cartographiez vos zones, plantes, capteurs et stations météo.</p>
           </div>
-          <div class="garden-actions" aria-label="Actions KML">
-            <button id="importKmlButton" type="button" class="secondary" disabled title="Import KML bientôt disponible">Importer KML</button>
-            <button id="exportKmlButton" type="button" class="secondary" disabled title="Export KML bientôt disponible">Exporter KML</button>
+          <div class="garden-header-actions" aria-label="Actions Jardin">
+            <span id="gardenStatusBadge" class="garden-status-badge">Enregistré</span>
+            <button id="importKmlButton" type="button" class="secondary">Importer un KML</button>
+            <button id="exportKmlButton" type="button" class="secondary">Exporter en KML</button>
+            <button id="gardenAddButton" type="button">Ajouter</button>
+            <button id="resetGardenButton" type="button" class="secondary danger-button">Réinitialiser</button>
           </div>
-        </div>
-        <p id="gardenKmlMessage" class="garden-state-note" role="status">Import et export KML préparés dans l'interface. Activation dès que l'API KML sera intégrée.</p>
-        <div class="garden-workspace">
-          <div class="garden-map-panel">
-            <div id="gardenMap" class="garden-map" role="img" aria-label="Carte Jardin séparée du radar météo"></div>
-            <p id="gardenMapMessage" class="garden-state-note">La carte affiche uniquement les positions et géométries déjà enregistrées.</p>
-          </div>
-          <aside class="garden-side-panel" aria-label="Entites jardin">
-            <div class="garden-side-header">
-              <h3>Entites</h3>
-              <span id="gardenEntitiesCount" class="garden-badge">0</span>
-            </div>
-            <ul id="gardenEntitiesList" class="garden-entities-list"></ul>
-          </aside>
-          <aside class="garden-detail-panel" aria-label="Détail de l'entité sélectionnée">
-            <div id="gardenEntityDetail" class="garden-entity-detail">
-              <p class="muted">Sélectionne une entité dans la liste ou sur la carte.</p>
-            </div>
-          </aside>
-        </div>
-      </section>
+        </header>
 
-      <section class="card">
-        <div class="section-header">
-          <div>
-            <h2>Ajouter ou modifier une entité</h2>
-            <p id="gardenFormState" class="muted">Aucune modification en cours.</p>
+        <p id="gardenKmlMessage" class="garden-state-note" role="status">Import et export KML préparés dans l'interface. Activation dès que l'API KML sera intégrée.</p>
+
+        <div class="garden-layout">
+          <aside class="garden-entities-sidebar" aria-label="Entités jardin">
+            <div class="garden-entities-header">
+              <div>
+                <h3>Entités jardin</h3>
+                <p class="muted">Gérez vos plantes, zones, stations et capteurs.</p>
+              </div>
+              <span id="gardenEntitiesCount" class="garden-entity-count">0 entité</span>
+            </div>
+            <div class="garden-entities-tools">
+              <input id="gardenEntitySearch" class="garden-entity-search" type="search" placeholder="Rechercher une entité…" autocomplete="off">
+              <select id="gardenEntityTypeFilter" class="garden-entity-type-filter">
+                <option value="all">Tous les types</option>
+                <option value="zones">Zones</option>
+                <option value="vine">Vigne</option>
+                <option value="vegetable_bed">Potager</option>
+                <option value="greenhouse">Serres</option>
+                <option value="weather_station">Stations</option>
+                <option value="sensor">Capteurs</option>
+                <option value="other">Autres</option>
+              </select>
+              <button id="gardenSidebarAddButton" type="button" class="secondary">Ajouter une entité</button>
+            </div>
+            <ul id="gardenEntitiesList" class="garden-entity-list"></ul>
+          </aside>
+
+          <div class="garden-main">
+            <section class="garden-map-card">
+              <div class="garden-map-card-header">
+                <div>
+                  <h3>Carte du jardin</h3>
+                  <p id="gardenMapMessage" class="muted">Zones, plantes, capteurs et station locale</p>
+                </div>
+                <div class="garden-map-toolbar" aria-label="Outils carte Jardin">
+                  <button type="button" class="secondary" data-garden-action="import">Importer un KML</button>
+                  <button type="button" class="secondary" data-garden-action="export">Exporter en KML</button>
+                  <button type="button" data-garden-action="add">Ajouter</button>
+                  <button type="button" class="secondary" data-garden-action="draw">Dessiner</button>
+                  <button type="button" class="secondary" data-garden-action="layers">Couches</button>
+                  <button type="button" class="secondary" data-garden-action="center-map">Recentrer</button>
+                </div>
+              </div>
+              <div class="garden-map-container">
+                <div id="gardenMap" class="garden-map" role="img" aria-label="Carte Jardin séparée du radar météo"></div>
+              </div>
+            </section>
+
+            <section id="gardenDetailCard" class="garden-detail-card garden-detail-card--empty" aria-label="Détail Jardin">
+              <div class="garden-detail-header">
+                <div id="gardenEntityDetail" class="garden-entity-detail">
+                  <h3>Sélectionnez une entité</h3>
+                  <p class="muted">Choisissez une entité dans la liste ou ajoutez une zone sur la carte.</p>
+                </div>
+              </div>
+              <div id="gardenDetailTabs" class="garden-detail-tabs" aria-label="Sections du détail Jardin"></div>
+              <div class="garden-detail-content">
+                <form id="gardenEntityForm" class="settings-form garden-detail-form">
+                  <label>
+                    Nom *
+                    <input name="name" type="text" required>
+                  </label>
+                  <label>
+                    Type *
+                    <select name="type">
+                      <option value="vine">Vigne</option>
+                      <option value="vegetable_bed">Potager</option>
+                      <option value="plant">Plante</option>
+                      <option value="tree">Arbre</option>
+                      <option value="zone">Zone</option>
+                      <option value="greenhouse">Serre</option>
+                      <option value="weather_station">Station météo</option>
+                      <option value="sensor">Capteur</option>
+                      <option value="compost">Compost</option>
+                      <option value="water_tank">Réserve d'eau</option>
+                      <option value="other">Autre</option>
+                    </select>
+                  </label>
+                  <label>
+                    Identifiant
+                    <input name="id" type="text" placeholder="vigne-nord">
+                  </label>
+                  <label>
+                    Tags
+                    <input name="tags" type="text" placeholder="fruit, arrosage">
+                  </label>
+                  <label>
+                    Position / zone
+                    <input name="positionLabel" type="text" placeholder="Repère bleu, haut du terrain…">
+                  </label>
+                  <label class="full-row">
+                    Notes
+                    <textarea name="notes" rows="3"></textarea>
+                  </label>
+                </form>
+                <div id="gardenDetailSecondary" class="garden-detail-secondary"></div>
+              </div>
+              <footer class="garden-detail-actions">
+                <span id="gardenFormState" class="garden-status-badge">Enregistré</span>
+                <button id="deleteGardenEntityButton" type="button" class="secondary danger-button" disabled>Supprimer</button>
+                <button id="duplicateGardenEntityButton" type="button" class="secondary" disabled>Dupliquer</button>
+                <button id="clearGardenFormButton" type="button" class="secondary">Annuler</button>
+                <button type="submit" form="gardenEntityForm">Enregistrer</button>
+              </footer>
+              <p id="gardenEntityMessage" class="muted"></p>
+            </section>
           </div>
-          <button id="resetGardenButton" type="button" class="secondary danger-button">Réinitialiser le jardin</button>
         </div>
-        <form id="gardenEntityForm" class="settings-form">
-          <label>
-            Identifiant optionnel
-            <input name="id" type="text" placeholder="vigne-nord">
-          </label>
-          <label>
-            Type
-            <select name="type">
-              <option value="vine">Vigne</option>
-              <option value="vegetable_bed">Potager</option>
-              <option value="plant">Plante</option>
-              <option value="tree">Arbre</option>
-              <option value="zone">Zone</option>
-              <option value="greenhouse">Serre</option>
-              <option value="weather_station">Station météo</option>
-              <option value="sensor">Capteur</option>
-              <option value="compost">Compost</option>
-              <option value="water_tank">Réserve d'eau</option>
-              <option value="other">Autre</option>
-            </select>
-          </label>
-          <label>
-            Nom
-            <input name="name" type="text" required>
-          </label>
-          <label>
-            Tags
-            <input name="tags" type="text" placeholder="fruit, arrosage">
-          </label>
-          <label>
-            Position / zone
-            <input name="positionLabel" type="text" placeholder="Repère bleu, haut du terrain…">
-          </label>
-          <label class="full-row">
-            Notes
-            <textarea name="notes" rows="3"></textarea>
-          </label>
-          <button type="submit">Enregistrer l'entité</button>
-          <div class="button-row full-row">
-            <button id="clearGardenFormButton" type="button" class="secondary">Nouveau</button>
-            <button id="deleteGardenEntityButton" type="button" class="secondary danger-button" disabled>Supprimer l'entité sélectionnée</button>
-          </div>
-        </form>
-        <p id="gardenEntityMessage" class="muted"></p>
       </section>
     </section>
 
@@ -304,6 +345,6 @@
   </main>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/app.js?v=20260515-wgf-ui" type="module"></script>
+  <script src="/app.js?v=20260515-garden-workspace" type="module"></script>
 </body>
 </html>
