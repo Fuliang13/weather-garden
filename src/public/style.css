@@ -675,8 +675,19 @@ body[data-active-panel="garden"] .app-shell {
   box-sizing: border-box;
   width: 100%;
   max-width: none;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
   margin: 0;
   padding: 24px 0 0;
+}
+
+.garden-header,
+.garden-state-note,
+.garden-layout {
+  min-width: 0;
+  grid-column: 1 / -1;
 }
 
 .garden-workspace button {
@@ -724,7 +735,7 @@ body[data-active-panel="garden"] .app-shell {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 16px;
+  margin-bottom: 0;
 }
 
 .garden-header-main h2 {
@@ -784,7 +795,7 @@ body[data-active-panel="garden"] .app-shell {
 }
 
 .garden-state-note {
-  margin: 0 0 16px;
+  margin: 0;
   color: var(--muted);
   font-size: 14px;
   line-height: 1.45;
@@ -792,9 +803,10 @@ body[data-active-panel="garden"] .app-shell {
 
 .garden-layout {
   display: grid;
+  width: 100%;
   grid-template-columns: 372px minmax(0, 1fr);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .garden-entities-sidebar,
@@ -1030,6 +1042,7 @@ body[data-active-panel="garden"] .app-shell {
 .garden-main {
   display: grid;
   min-width: 0;
+  width: 100%;
   grid-template-columns: minmax(0, 1fr);
   gap: 16px;
 }
@@ -1069,6 +1082,16 @@ body[data-active-panel="garden"] .app-shell {
   border: 0;
   border-radius: 0;
   background: transparent;
+}
+
+@media (min-width: 1400px) {
+  .garden-layout {
+    grid-template-columns: 390px minmax(0, 1fr);
+  }
+
+  .garden-map-container {
+    height: clamp(520px, 46vh, 640px);
+  }
 }
 
 .garden-entity-marker,
