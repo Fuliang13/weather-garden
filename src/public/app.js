@@ -1,5 +1,19 @@
 const AUTO_REFRESH_MS = 5 * 60 * 1000;
 
+const GARDEN_ENTITY_COLORS = {
+  zone: "#588157",
+  vegetable_bed: "#4f8f45",
+  vine: "#7d4e8a",
+  tree: "#386641",
+  plant: "#74a57f",
+  greenhouse: "#d99027",
+  weather_station: "#277da1",
+  sensor: "#5a7d8a",
+  water_tank: "#3a86a8",
+  compost: "#8d6e4f",
+  other: "#7c8a80"
+};
+
 const state = {
   status: null,
   gardenState: null,
@@ -832,6 +846,7 @@ function renderGardenEntityRows(entities, allEntities) {
 
     item.className = `garden-entity-row${entity.id === state.selectedGardenEntityId ? " garden-entity-row--selected" : ""}${hasGardenMapPosition(entity) ? "" : " garden-entity-row--no-position"}`;
     item.dataset.selected = String(entity.id === state.selectedGardenEntityId);
+    item.dataset.entityType = entity.type || "other";
     button.type = "button";
     button.className = "garden-entity-select";
     button.innerHTML = `
@@ -847,13 +862,12 @@ function renderGardenEntityRows(entities, allEntities) {
 
     actions.className = "garden-entity-row-actions";
 
-    if (hasGardenMapPosition(entity)) {
-      centerButton.type = "button";
-      centerButton.className = "garden-entity-center-button secondary";
-      centerButton.textContent = "Centrer";
-      centerButton.addEventListener("click", () => centerGardenEntity(entity.id));
-      actions.append(centerButton);
-    }
+    centerButton.type = "button";
+    centerButton.className = "garden-entity-center-button secondary";
+    centerButton.textContent = "Centrer";
+    centerButton.disabled = !hasGardenMapPosition(entity);
+    centerButton.addEventListener("click", () => centerGardenEntity(entity.id));
+    actions.append(centerButton);
 
     item.append(button, actions);
     els.gardenEntitiesList.append(item);
@@ -1059,7 +1073,7 @@ function updateGardenLayers(entities) {
 
   const selectedLayer = state.gardenLayerById.get(state.selectedGardenEntityId);
   if (selectedLayer?.setStyle) {
-    selectedLayer.setStyle({ weight: 4, color: "#1b4332" });
+    selectedLayer.setStyle({ fillOpacity: 0.42, opacity: 1, weight: 4 });
   }
 
   if (bounds.length) {
@@ -1411,39 +1425,35 @@ function formatGardenGeometryLabel(entity) {
 }
 
 function getGardenVectorStyle(entity) {
-  if (isLocalStationEntity(entity)) {
-    return {
-      color: entity.id === state.selectedGardenEntityId ? "#1b4332" : "#3a6f78",
-      fillColor: "#9bc3bd",
-      fillOpacity: 0.25,
-      opacity: 0.95,
-      weight: entity.id === state.selectedGardenEntityId ? 4 : 2
-    };
-  }
+  const color = getGardenEntityColor(entity);
+  const selected = entity.id === state.selectedGardenEntityId;
 
   return {
-    color: entity.id === state.selectedGardenEntityId ? "#1b4332" : "#2d6a4f",
-    fillColor: "#74c69d",
-    fillOpacity: 0.22,
-    opacity: 0.9,
-    weight: entity.id === state.selectedGardenEntityId ? 4 : 2
+    color,
+    fillColor: color,
+    fillOpacity: selected ? 0.42 : 0.24,
+    opacity: 1,
+    weight: selected ? 4 : 2
   };
 }
 
 function getGardenMarkerOptions(entity) {
-  if (!isLocalStationEntity(entity)) {
-    return {};
-  }
+  const color = getGardenEntityColor(entity);
+  const selected = entity.id === state.selectedGardenEntityId;
 
   return {
     icon: window.L.divIcon({
-      className: "garden-station-marker",
-      html: `<span aria-hidden="true"></span>`,
-      iconSize: [28, 28],
-      iconAnchor: [14, 14],
+      className: `garden-entity-marker${isLocalStationEntity(entity) ? " garden-station-marker" : ""}`,
+      html: `<span aria-hidden="true" style="--garden-entity-color: ${color}"></span>`,
+      iconSize: selected ? [32, 32] : [28, 28],
+      iconAnchor: selected ? [16, 16] : [14, 14],
       popupAnchor: [0, -14]
     })
   };
+}
+
+function getGardenEntityColor(entity) {
+  return GARDEN_ENTITY_COLORS[entity?.type] || GARDEN_ENTITY_COLORS.other;
 }
 
 function getGardenMapCenter(entities, location) {
