@@ -46,9 +46,10 @@ button:disabled {
 }
 
 .app-shell {
-  width: min(1040px, calc(100% - 2rem));
-  margin: 0 auto;
-  padding: 1.5rem 0 3rem;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 1.5rem clamp(1rem, 2vw, 2rem) 3rem;
 }
 
 .hero {
@@ -673,9 +674,9 @@ body[data-active-panel="garden"] .app-shell {
   display: grid;
   box-sizing: border-box;
   width: 100%;
-  max-width: 1500px;
-  margin: 0 auto;
-  padding: 24px;
+  max-width: none;
+  margin: 0;
+  padding: 24px 0 0;
 }
 
 .garden-workspace button {
@@ -1457,6 +1458,28 @@ button.secondary,
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+@media (min-width: 1400px) {
+  .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .metrics-wide {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .settings-form {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .sources {
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  }
+
+  .radar-map {
+    height: min(64vh, 720px);
+  }
+}
+
 .garden-alerts-list li {
   display: grid;
   gap: 0.25rem;
@@ -1481,7 +1504,7 @@ button.secondary,
   }
 
   .garden-workspace {
-    padding: 20px;
+    padding: 20px 0 0;
   }
 
   .garden-layout {
@@ -1636,7 +1659,7 @@ button.secondary,
   .garden-workspace {
     max-width: none;
     overflow-x: hidden;
-    padding: 16px;
+    padding: 16px 0 0;
   }
 
   .garden-header {
