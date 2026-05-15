@@ -1,6 +1,33 @@
 const ECOWITT_DEFAULT_API_BASE = "https://api.ecowitt.net/api/v3";
 const DEFAULT_STALE_MINUTES = 20;
 const MAX_SENSOR_CLOCK_SKEW_MINUTES = 10;
+const HISTORY_CALLBACK_GROUPS = [
+  "outdoor",
+  "rainfall",
+  "rainfall_piezo",
+  "wind",
+  "soil_ch1",
+  "soil_ch2",
+  "soil_ch3",
+  "soil_ch4",
+  "soil_ch5",
+  "soil_ch6",
+  "soil_ch7",
+  "soil_ch8",
+  "leaf_ch1",
+  "leaf_ch2",
+  "leaf_ch3",
+  "leaf_ch4",
+  "leaf_ch5",
+  "leaf_ch6",
+  "leaf_ch7",
+  "leaf_ch8"
+];
+
+const HISTORY_WINDOWS = [
+  { key: "last24h", label: "24h", hours: 24, cycleType: "5min" },
+  { key: "last7d", label: "7d", hours: 24 * 7, cycleType: "30min" }
+];
 
 export async function fetchEcowittObservation({ env }) {
   const config = readEcowittConfig(env);
@@ -65,6 +92,64 @@ export async function fetchEcowittObservation({ env }) {
       }
     });
   }
+}
+
+export async function fetchEcowittDiagnostics({ env }) {
+  const current = await fetchEcowittObservation({ env });
+  const history = await fetchEcowittHistory({ env });
+
+  return {
+    ok: current.ok || history.ok,
+    source: "ecowitt",
+    label: current.label || history.label,
+    fetchedAt: new Date().toISOString(),
+    current,
+    history,
+    diagnostics: {
+      current: current.diagnostics,
+      history: history.diagnostics
+    }
+  };
+}
+
+export async function fetchEcowittHistory({ env }) {
+  const config = readEcowittConfig(env);
+  const fetchedAt = new Date().toISOString();
+
+  if (!config.configured) {
+    return buildUnavailableEcowittHistoryResult({
+      label: config.label,
+      fetchedAt,
+      message: buildMissingConfigMessage(config.missing),
+      diagnostics: {
+        ...config.publicDiagnostics,
+        apiOk: false
+      }
+    });
+  }
+
+  const windowResults = await Promise.all(HISTORY_WINDOWS.map((windowConfig) => {
+    return fetchEcowittHistoryWindow({ config, windowConfig, fetchedAt });
+  }));
+  const windows = Object.fromEntries(windowResults.map((result) => [result.key, result.window]));
+  const ok = windowResults.some((result) => result.window.ok);
+
+  return {
+    ok,
+    enabled: true,
+    source: "ecowitt",
+    label: config.label,
+    fetchedAt,
+    state: ok ? "fresh" : "unavailable",
+    message: ok ? "Ecowitt history is available." : "Ecowitt history is unavailable.",
+    windows,
+    diagnostics: {
+      ...config.publicDiagnostics,
+      configured: true,
+      apiOk: ok,
+      windows: windowResults.map((result) => result.window.diagnostics)
+    }
+  };
 }
 
 export function normalizeEcowittPayload(payload, {
@@ -141,6 +226,82 @@ export function normalizeEcowittPayload(payload, {
   };
 }
 
+export function normalizeEcowittHistoryPayload(payload, {
+  label = "Station locale",
+  fetchedAt = new Date().toISOString(),
+  windowKey = "custom",
+  windowLabel = "custom",
+  cycleType = null,
+  startAt = null,
+  endAt = null,
+  diagnostics = { configured: true }
+} = {}) {
+  if (isEcowittError(payload)) {
+    return buildUnavailableEcowittHistoryWindow({
+      label,
+      fetchedAt,
+      windowKey,
+      windowLabel,
+      cycleType,
+      startAt,
+      endAt,
+      message: payload?.msg || payload?.message || `Ecowitt API returned code ${payload?.code}.`,
+      diagnostics: {
+        ...diagnostics,
+        configured: true,
+        apiCode: payload?.code ?? null
+      }
+    });
+  }
+
+  const data = payload?.data || {};
+  const invalidValues = [];
+  const rows = collectHistoryRows(data, invalidValues);
+  const series = buildHistorySeries(rows);
+  const points = rows.map(({ time, values }) => ({
+    time,
+    temperatureC: values.temperatureC ?? null,
+    humidityPct: values.humidityPct ?? null,
+    rainRateMmPerHour: values.rainRateMmPerHour ?? null,
+    rainMm: values.rainMm ?? null,
+    windKmh: values.windKmh ?? null,
+    gustKmh: values.gustKmh ?? null,
+    windDirectionDeg: values.windDirectionDeg ?? null,
+    soilMoisture: values.soilMoisture || [],
+    leafWetness: values.leafWetness || []
+  }));
+
+  return {
+    ok: points.length > 0,
+    source: "ecowitt",
+    label,
+    fetchedAt,
+    key: windowKey,
+    windowLabel,
+    cycleType,
+    range: {
+      startAt,
+      endAt
+    },
+    pointCount: points.length,
+    points,
+    series,
+    message: points.length ? `Ecowitt ${windowLabel} history normalized.` : `Ecowitt ${windowLabel} history has no usable points.`,
+    diagnostics: {
+      ...diagnostics,
+      configured: true,
+      window: windowKey,
+      windowLabel,
+      cycleType,
+      startAt,
+      endAt,
+      pointCount: points.length,
+      sensorGroups: collectSensorGroups(data),
+      invalidValues
+    }
+  };
+}
+
 function readEcowittConfig(env = {}) {
   const applicationKey = env.ECOWITT_APPLICATION_KEY || "";
   const apiKey = env.ECOWITT_API_KEY || "";
@@ -181,6 +342,26 @@ function readEcowittConfig(env = {}) {
 
 function buildEcowittRealtimeUrl(config) {
   const url = new URL(`${config.apiBase}/device/real_time`);
+  applyEcowittAuthParams(url, config);
+  applyEcowittMetricUnitParams(url);
+  url.searchParams.set("call_back", config.callback);
+
+  return url;
+}
+
+function buildEcowittHistoryUrl(config, { startAt, endAt, cycleType }) {
+  const url = new URL(`${config.apiBase}/device/history`);
+  applyEcowittAuthParams(url, config);
+  applyEcowittMetricUnitParams(url);
+  url.searchParams.set("start_date", formatEcowittHistoryDate(startAt));
+  url.searchParams.set("end_date", formatEcowittHistoryDate(endAt));
+  url.searchParams.set("call_back", HISTORY_CALLBACK_GROUPS.join(","));
+  url.searchParams.set("cycle_type", cycleType);
+
+  return url;
+}
+
+function applyEcowittAuthParams(url, config) {
   url.searchParams.set("application_key", config.applicationKey);
   url.searchParams.set("api_key", config.apiKey);
 
@@ -189,15 +370,14 @@ function buildEcowittRealtimeUrl(config) {
   } else {
     url.searchParams.set("imei", config.imei);
   }
+}
 
-  url.searchParams.set("call_back", config.callback);
+function applyEcowittMetricUnitParams(url) {
   url.searchParams.set("temp_unitid", "1");
   url.searchParams.set("pressure_unitid", "3");
   url.searchParams.set("wind_speed_unitid", "7");
   url.searchParams.set("rainfall_unitid", "12");
   url.searchParams.set("solar_irradiance_unitid", "16");
-
-  return url;
 }
 
 function buildUnavailableEcowittResult({ label, fetchedAt, message, errors = [], diagnostics = {} }) {
@@ -217,6 +397,141 @@ function buildUnavailableEcowittResult({ label, fetchedAt, message, errors = [],
     errors,
     diagnostics
   };
+}
+
+function buildUnavailableEcowittHistoryResult({ label, fetchedAt, message, errors = [], diagnostics = {} }) {
+  return {
+    ok: false,
+    enabled: !!diagnostics.configured,
+    source: "ecowitt",
+    label,
+    fetchedAt,
+    state: "unavailable",
+    message,
+    windows: {},
+    errors,
+    diagnostics
+  };
+}
+
+function buildUnavailableEcowittHistoryWindow({
+  label,
+  fetchedAt,
+  windowKey,
+  windowLabel,
+  cycleType,
+  startAt,
+  endAt,
+  message,
+  errors = [],
+  diagnostics = {}
+}) {
+  return {
+    ok: false,
+    source: "ecowitt",
+    label,
+    fetchedAt,
+    key: windowKey,
+    windowLabel,
+    cycleType,
+    range: {
+      startAt,
+      endAt
+    },
+    pointCount: 0,
+    points: [],
+    series: emptyHistorySeries(),
+    message,
+    errors,
+    diagnostics: {
+      ...diagnostics,
+      window: windowKey,
+      windowLabel,
+      cycleType,
+      startAt,
+      endAt,
+      pointCount: 0
+    }
+  };
+}
+
+async function fetchEcowittHistoryWindow({ config, windowConfig, fetchedAt }) {
+  const endAt = new Date(fetchedAt);
+  const startAt = new Date(endAt.getTime() - windowConfig.hours * 60 * 60_000);
+  const url = buildEcowittHistoryUrl(config, {
+    startAt,
+    endAt,
+    cycleType: windowConfig.cycleType
+  });
+
+  try {
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        "accept": "application/json"
+      }
+    });
+
+    if (!response.ok) {
+      return {
+        key: windowConfig.key,
+        window: buildUnavailableEcowittHistoryWindow({
+          label: config.label,
+          fetchedAt,
+          windowKey: windowConfig.key,
+          windowLabel: windowConfig.label,
+          cycleType: windowConfig.cycleType,
+          startAt: startAt.toISOString(),
+          endAt: endAt.toISOString(),
+          message: `Ecowitt history HTTP ${response.status}.`,
+          errors: [`Ecowitt history HTTP ${response.status}`],
+          diagnostics: {
+            ...config.publicDiagnostics,
+            apiOk: false,
+            httpStatus: response.status
+          }
+        })
+      };
+    }
+
+    const payload = await response.json();
+
+    return {
+      key: windowConfig.key,
+      window: normalizeEcowittHistoryPayload(payload, {
+        label: config.label,
+        fetchedAt,
+        windowKey: windowConfig.key,
+        windowLabel: windowConfig.label,
+        cycleType: windowConfig.cycleType,
+        startAt: startAt.toISOString(),
+        endAt: endAt.toISOString(),
+        diagnostics: {
+          ...config.publicDiagnostics,
+          apiOk: true
+        }
+      })
+    };
+  } catch (error) {
+    return {
+      key: windowConfig.key,
+      window: buildUnavailableEcowittHistoryWindow({
+        label: config.label,
+        fetchedAt,
+        windowKey: windowConfig.key,
+        windowLabel: windowConfig.label,
+        cycleType: windowConfig.cycleType,
+        startAt: startAt.toISOString(),
+        endAt: endAt.toISOString(),
+        message: "Ecowitt history API call failed.",
+        errors: [sanitizeSensitiveText(error?.message || "Ecowitt history API call failed.", config)],
+        diagnostics: {
+          ...config.publicDiagnostics,
+          apiOk: false
+        }
+      })
+    };
+  }
 }
 
 function normalizeCurrentObservation(data, invalidValues) {
@@ -384,6 +699,170 @@ function collectBatteryMeasurements(data, invalidValues) {
       };
     })
     .filter(Boolean);
+}
+
+function collectHistoryRows(data, invalidValues) {
+  const byTime = new Map();
+  addHistoryMetric(byTime, data, "outdoor.temperature", "temperatureC", readTemperatureSensorValue, invalidValues);
+  addHistoryMetric(byTime, data, "outdoor.humidity", "humidityPct", readPercentSensorValue, invalidValues);
+  addHistoryMetric(byTime, data, `${selectRainFamily(data)}.rain_rate`, "rainRateMmPerHour", readRainSensorValue, invalidValues);
+  addHistoryMetric(byTime, data, `${selectRainFamily(data)}.hourly`, "rainMm", readRainSensorValue, invalidValues);
+  addHistoryMetric(byTime, data, `${selectRainFamily(data)}.1_hour`, "rainMm", readRainSensorValue, invalidValues);
+  addHistoryMetric(byTime, data, "wind.wind_speed", "windKmh", readWindSensorValue, invalidValues);
+  addHistoryMetric(byTime, data, "wind.wind_gust", "gustKmh", readWindSensorValue, invalidValues);
+  addHistoryMetric(byTime, data, "wind.wind_direction", "windDirectionDeg", readDirectionSensorValue, invalidValues);
+  addHistoryChannelMetric(byTime, data, /^soil_ch(\d+)$/, "soilmoisture", "soilMoisture", "moisturePct", readPercentSensorValue, invalidValues);
+  addHistoryChannelMetric(byTime, data, /^leaf_ch(\d+)$/, "leaf_wetness", "leafWetness", "wetnessPct", readPercentSensorValue, invalidValues);
+
+  return [...byTime.entries()]
+    .map(([time, values]) => ({ time, values }))
+    .filter((row) => hasNormalizedValue(row.values))
+    .sort((a, b) => a.time.localeCompare(b.time));
+}
+
+function addHistoryMetric(byTime, data, path, key, reader, invalidValues) {
+  for (const sensor of expandHistorySamples(readPath(data, path))) {
+    const time = coerceIsoDate(sensor.time);
+
+    if (!time) {
+      continue;
+    }
+
+    const value = reader(sensor, path, invalidValues);
+
+    if (!Number.isFinite(value)) {
+      continue;
+    }
+
+    const row = getHistoryRow(byTime, time);
+    row[key] = value;
+  }
+}
+
+function addHistoryChannelMetric(byTime, data, groupPattern, metricKey, arrayKey, valueKey, reader, invalidValues) {
+  for (const [group, values] of Object.entries(data || {})) {
+    const match = group.match(groupPattern);
+
+    if (!match || !values?.[metricKey]) {
+      continue;
+    }
+
+    const channel = Number(match[1]);
+    const path = `${group}.${metricKey}`;
+
+    for (const sensor of expandHistorySamples(values[metricKey])) {
+      const time = coerceIsoDate(sensor.time);
+
+      if (!time) {
+        continue;
+      }
+
+      const value = reader(sensor, path, invalidValues);
+
+      if (!Number.isFinite(value)) {
+        continue;
+      }
+
+      const row = getHistoryRow(byTime, time);
+      const samples = row[arrayKey] || [];
+      const existing = samples.find((item) => item.channel === channel);
+
+      if (existing) {
+        existing[valueKey] = value;
+      } else {
+        samples.push({ channel, [valueKey]: value });
+      }
+
+      row[arrayKey] = samples.sort((a, b) => a.channel - b.channel);
+    }
+  }
+}
+
+function getHistoryRow(byTime, time) {
+  const row = byTime.get(time) || {};
+  byTime.set(time, row);
+  return row;
+}
+
+function expandHistorySamples(sensor) {
+  if (!sensor || typeof sensor !== "object") {
+    return [];
+  }
+
+  const unit = sensor.unit ?? null;
+
+  if (Array.isArray(sensor.list)) {
+    return sensor.list.map((item) => ({ ...item, unit: item.unit ?? unit }));
+  }
+
+  if (sensor.list && typeof sensor.list === "object") {
+    return Object.entries(sensor.list).map(([time, value]) => ({ time, value, unit }));
+  }
+
+  if (Array.isArray(sensor.value)) {
+    return sensor.value.map((item) => typeof item === "object" ? { ...item, unit: item.unit ?? unit } : { value: item, unit });
+  }
+
+  if (sensor.value && typeof sensor.value === "object") {
+    return Object.entries(sensor.value).map(([time, value]) => ({ time, value, unit }));
+  }
+
+  if (sensor.time !== undefined && sensor.value !== undefined) {
+    return [sensor];
+  }
+
+  return Object.entries(sensor)
+    .filter(([key]) => key !== "unit")
+    .map(([time, value]) => ({ time, value, unit }));
+}
+
+function buildHistorySeries(rows) {
+  const series = emptyHistorySeries();
+
+  for (const row of rows) {
+    pushHistoryValue(series.temperatureC, row.time, row.values.temperatureC);
+    pushHistoryValue(series.humidityPct, row.time, row.values.humidityPct);
+    pushHistoryValue(series.rainRateMmPerHour, row.time, row.values.rainRateMmPerHour);
+    pushHistoryValue(series.rainMm, row.time, row.values.rainMm);
+    pushHistoryValue(series.windKmh, row.time, row.values.windKmh);
+    pushHistoryValue(series.gustKmh, row.time, row.values.gustKmh);
+    pushHistoryValue(series.windDirectionDeg, row.time, row.values.windDirectionDeg);
+
+    for (const sample of row.values.soilMoisture || []) {
+      const key = `ch${sample.channel}`;
+      series.soilMoisture[key] = series.soilMoisture[key] || [];
+      pushHistoryValue(series.soilMoisture[key], row.time, sample.moisturePct);
+    }
+
+    for (const sample of row.values.leafWetness || []) {
+      const key = `ch${sample.channel}`;
+      series.leafWetness[key] = series.leafWetness[key] || [];
+      pushHistoryValue(series.leafWetness[key], row.time, sample.wetnessPct);
+    }
+  }
+
+  return series;
+}
+
+function emptyHistorySeries() {
+  return {
+    temperatureC: [],
+    humidityPct: [],
+    rainRateMmPerHour: [],
+    rainMm: [],
+    windKmh: [],
+    gustKmh: [],
+    windDirectionDeg: [],
+    soilMoisture: {},
+    leafWetness: {}
+  };
+}
+
+function pushHistoryValue(series, time, value) {
+  series.push({
+    time,
+    value: Number.isFinite(value) ? value : null
+  });
 }
 
 function isEcowittError(payload) {
@@ -556,6 +1035,37 @@ function readPositiveSensor(sensor, path, invalidValues) {
   return validateRange(value, 0, Infinity, path, invalidValues);
 }
 
+function readTemperatureSensorValue(sensor, path, invalidValues) {
+  return readTemperatureC({ sensor }, "sensor", invalidValuesForPath(invalidValues, path));
+}
+
+function readWindSensorValue(sensor, path, invalidValues) {
+  return readWindKmh({ sensor }, "sensor", invalidValuesForPath(invalidValues, path));
+}
+
+function readRainSensorValue(sensor, path, invalidValues) {
+  return readRainMm({ sensor }, "sensor", invalidValuesForPath(invalidValues, path));
+}
+
+function readPercentSensorValue(sensor, path, invalidValues) {
+  return validateRange(coerceNumber(sensor?.value), 0, 100, path, invalidValues);
+}
+
+function readDirectionSensorValue(sensor, path, invalidValues) {
+  return validateRange(coerceNumber(sensor?.value), 0, 360, path, invalidValues);
+}
+
+function invalidValuesForPath(invalidValues, path) {
+  return {
+    push(entry) {
+      invalidValues.push({
+        ...entry,
+        path
+      });
+    }
+  };
+}
+
 function validateRange(value, min, max, path, invalidValues) {
   if (!Number.isFinite(value) || value < min || value > max) {
     recordInvalidValue(invalidValues, path, "out of range", null, value);
@@ -612,6 +1122,10 @@ function coerceIsoDate(value, maxTimeMs = Infinity) {
 
 function coerceNumber(...values) {
   for (const value of values) {
+    if (value === null || value === undefined || value === "") {
+      continue;
+    }
+
     const number = Number(value);
 
     if (Number.isFinite(number)) {
@@ -697,6 +1211,10 @@ function maskIdentifier(value) {
   }
 
   return `***${compact.slice(-4)}`;
+}
+
+function formatEcowittHistoryDate(date) {
+  return date.toISOString().slice(0, 19).replace("T", " ");
 }
 
 function toPositiveNumber(value, fallback) {

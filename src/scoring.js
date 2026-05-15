@@ -23,10 +23,21 @@ export const DEFAULT_SETTINGS = {
   windGustRiskKmh: 70,
   heavyRain2hMm: 8,
   diseaseRain2hMm: 2,
-  diseaseHumidityPct: 80
+  diseaseHumidityPct: 80,
+  unitSystem: "metric"
 };
 
 export const HORIZONS_MINUTES = [30, 60, 120, 360, 720, 1440, 2880];
+
+const FORECAST_COMPARISON_HORIZONS = [
+  { key: "minutecast", label: "0-2 h", minutes: 120 },
+  { key: "1h", label: "1 h", minutes: 60 },
+  { key: "2h", label: "2 h", minutes: 120 },
+  { key: "4h", label: "4 h", minutes: 240 },
+  { key: "8h", label: "8 h", minutes: 480 },
+  { key: "1d", label: "1 j", minutes: 1440 },
+  { key: "2d", label: "2 j", minutes: 2880 }
+];
 
 const ALERT_LABELS = {
   none: "Aucune alerte",
@@ -58,7 +69,8 @@ export function mergeSettings(settings = {}) {
     windGustRiskKmh: toPositiveNumber(settings.windGustRiskKmh, DEFAULT_SETTINGS.windGustRiskKmh),
     heavyRain2hMm: toPositiveNumber(settings.heavyRain2hMm, DEFAULT_SETTINGS.heavyRain2hMm),
     diseaseRain2hMm: toPositiveNumber(settings.diseaseRain2hMm, DEFAULT_SETTINGS.diseaseRain2hMm),
-    diseaseHumidityPct: toPositiveNumber(settings.diseaseHumidityPct, DEFAULT_SETTINGS.diseaseHumidityPct)
+    diseaseHumidityPct: toPositiveNumber(settings.diseaseHumidityPct, DEFAULT_SETTINGS.diseaseHumidityPct),
+    unitSystem: normalizeUnitSystem(settings.unitSystem)
   };
 }
 
@@ -132,7 +144,7 @@ export function buildWeatherStatus({
       alertLabel: ALERT_LABELS[alertLevel],
       riskLabel: ALERT_LABELS[alertLevel],
       headline: buildRainHeadline(rainSignal, alertLevel),
-      detail: buildRainDetail(rainSignal, alertHorizon),
+      detail: buildRainDetail(rainSignal, alertHorizon, safeSettings),
       shouldAlert: shouldSendRainAlert(safeSettings, rainSignal, alertLevel, alertHorizon),
       horizons: horizonResults,
       garden: rainGardenAdvice
@@ -141,8 +153,331 @@ export function buildWeatherStatus({
       meteoFrance: meteoFranceRadar || null,
       rainViewer: rainViewer || null
     },
+    forecastComparison: buildForecastComparison({
+      openMeteo,
+      metNorway,
+      meteoFranceRadar,
+      ecowittObservation,
+      settings: safeSettings,
+      now
+    }),
     sources: buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer, ecowittObservation, errors),
     errors
+  };
+}
+
+function buildForecastComparison({ openMeteo, metNorway, meteoFranceRadar, ecowittObservation, settings, now }) {
+  const nowMs = now.getTime();
+
+  return {
+    generatedAt: now.toISOString(),
+    horizons: FORECAST_COMPARISON_HORIZONS.map((horizon) => buildForecastComparisonHorizon({
+      horizon,
+      openMeteo,
+      metNorway,
+      meteoFranceRadar,
+      ecowittObservation,
+      settings,
+      nowMs
+    }))
+  };
+}
+
+function buildForecastComparisonHorizon({ horizon, openMeteo, metNorway, meteoFranceRadar, ecowittObservation, settings, nowMs }) {
+  const arome = buildAromeForecast(openMeteo, horizon, nowMs);
+  const met = buildMetNorwayForecast(metNorway, horizon, nowMs);
+  const wgf = buildWgfForecast({
+    horizon,
+    arome,
+    met,
+    radar: buildReliableRadarObservation(meteoFranceRadar),
+    ecowitt: buildFreshEcowittObservation(ecowittObservation),
+    settings
+  });
+
+  return {
+    key: horizon.key,
+    label: horizon.label,
+    minutes: horizon.minutes,
+    sources: {
+      arome,
+      metNorway: met,
+      wgf
+    }
+  };
+}
+
+function buildAromeForecast(openMeteo, horizon, nowMs) {
+  const state = getSourceFreshness(openMeteo);
+  const freshnessMinutes = sourceFreshnessMinutes(openMeteo, nowMs);
+
+  if (!openMeteo?.ok || (!openMeteo.minutely15?.length && !openMeteo.hourly?.length && !openMeteo.daily?.length)) {
+    return emptyForecastSource(state, freshnessMinutes);
+  }
+
+  const rows = selectOpenMeteoRows(openMeteo, horizon, nowMs);
+  const targetRows = [...(openMeteo.minutely15 || []), ...(openMeteo.hourly || []), ...(openMeteo.daily || [])];
+  const target = pickNearestRow(targetRows, nowMs + horizon.minutes * 60_000);
+
+  if (!rows.length && !target) {
+    return emptyForecastSource(state, freshnessMinutes);
+  }
+
+  return {
+    available: true,
+    state,
+    freshnessMinutes,
+    precipitationMm: sumNullable(rows.map((row) => row.precipitation ?? row.precipitation_sum ?? row.rain ?? row.rain_sum)),
+    temperatureC: pickOpenMeteoTemperature(target),
+    windKmh: pickNumber(target?.wind_speed_10m, target?.wind_speed_10m_max),
+    gustKmh: pickNumber(target?.wind_gusts_10m, target?.wind_gusts_10m_max)
+  };
+}
+
+function buildMetNorwayForecast(metNorway, horizon, nowMs) {
+  const state = getSourceFreshness(metNorway);
+  const freshnessMinutes = sourceFreshnessMinutes(metNorway, nowMs);
+
+  if (!metNorway?.ok || !metNorway.timeseries?.length) {
+    return emptyForecastSource(state, freshnessMinutes);
+  }
+
+  const endMs = nowMs + horizon.minutes * 60_000;
+  const rows = metNorway.timeseries.filter((row) => isInFutureWindow(row.timeMs, nowMs, endMs));
+  const target = pickNearestRow(metNorway.timeseries, endMs);
+
+  if (!rows.length && !target) {
+    return emptyForecastSource(state, freshnessMinutes);
+  }
+
+  return {
+    available: true,
+    state,
+    freshnessMinutes,
+    precipitationMm: sumNullable(rows.map((row) => row.next1h?.precipitation_amount)),
+    temperatureC: pickNumber(target?.instant?.air_temperature),
+    windKmh: pickNumber(target?.instant?.wind_speed_kmh),
+    gustKmh: pickNumber(target?.instant?.wind_gusts_kmh)
+  };
+}
+
+function buildWgfForecast({ horizon, arome, met, radar, ecowitt, settings }) {
+  const forecastSources = [arome, met].filter((source) => source.available);
+  const primaryAvailable = arome.available;
+  const confirmationAvailable = met.available;
+  const divergence = detectForecastDivergence(arome, met, settings);
+  const observedInputs = horizon.minutes <= 120
+    ? [radar, ecowitt].filter((source) => source.available)
+    : [];
+  const inputs = [...forecastSources, ...observedInputs];
+
+  if (!inputs.length) {
+    return {
+      available: false,
+      state: "unavailable",
+      precipitationMm: null,
+      temperatureC: null,
+      windKmh: null,
+      gustKmh: null,
+      confidence: "unavailable",
+      summary: "Prevision WGF indisponible.",
+      reason: "Aucune source exploitable pour cet horizon."
+    };
+  }
+
+  const state = inputs.some((source) => source.state === "fresh") ? "fresh" : "stale";
+  const confidence = getWgfConfidence({ primaryAvailable, confirmationAvailable, divergence, state });
+  const precipitationMm = weightedAverageNullable([
+    { value: arome.precipitationMm, weight: arome.available ? 0.65 : 0 },
+    { value: met.precipitationMm, weight: met.available ? 0.25 : 0 },
+    { value: radar.precipitationMm, weight: radar.available ? 0.10 : 0 }
+  ]);
+  const temperatureC = weightedAverageNullable([
+    { value: arome.temperatureC, weight: arome.available ? 0.55 : 0 },
+    { value: met.temperatureC, weight: met.available ? 0.30 : 0 },
+    { value: ecowitt.temperatureC, weight: ecowitt.available && horizon.minutes <= 60 ? 0.15 : 0 }
+  ]);
+  const windKmh = weightedAverageNullable([
+    { value: arome.windKmh, weight: arome.available ? 0.55 : 0 },
+    { value: met.windKmh, weight: met.available ? 0.30 : 0 },
+    { value: ecowitt.windKmh, weight: ecowitt.available && horizon.minutes <= 60 ? 0.15 : 0 }
+  ]);
+
+  return {
+    available: true,
+    state,
+    precipitationMm,
+    temperatureC,
+    windKmh,
+    gustKmh: maxNullable([arome.gustKmh, met.gustKmh, horizon.minutes <= 60 ? ecowitt.gustKmh : null]),
+    confidence,
+    summary: buildWgfSummary(precipitationMm, settings),
+    reason: buildWgfReason({ primaryAvailable, confirmationAvailable, divergence, state, observedInputs })
+  };
+}
+
+function buildReliableRadarObservation(meteoFranceRadar) {
+  const nativeOk = !!meteoFranceRadar?.nativeLayer?.ok;
+
+  if (!meteoFranceRadar?.ok || !nativeOk) {
+    return emptyForecastSource(getSourceFreshness(meteoFranceRadar), null);
+  }
+
+  return {
+    available: Number.isFinite(meteoFranceRadar.precipitationMm),
+    state: getSourceFreshness(meteoFranceRadar),
+    freshnessMinutes: null,
+    precipitationMm: Number.isFinite(meteoFranceRadar.precipitationMm) ? round(meteoFranceRadar.precipitationMm, 2) : null,
+    temperatureC: null,
+    windKmh: null,
+    gustKmh: null
+  };
+}
+
+function buildFreshEcowittObservation(ecowittObservation) {
+  const current = ecowittObservation?.ok && !ecowittObservation.stale ? ecowittObservation.current || {} : null;
+
+  if (!current) {
+    return emptyForecastSource(getSourceFreshness(ecowittObservation), ecowittObservation?.freshnessMinutes ?? ecowittObservation?.ageMinutes ?? null);
+  }
+
+  return {
+    available: true,
+    state: "fresh",
+    freshnessMinutes: ecowittObservation.freshnessMinutes ?? ecowittObservation.ageMinutes ?? null,
+    precipitationMm: null,
+    temperatureC: pickNumber(current.temperatureC),
+    windKmh: pickNumber(current.windKmh),
+    gustKmh: pickNumber(current.gustKmh)
+  };
+}
+
+function selectOpenMeteoRows(openMeteo, horizon, nowMs) {
+  const endMs = nowMs + horizon.minutes * 60_000;
+  const minutelyRows = (openMeteo.minutely15 || []).filter((row) => isInFutureWindow(row.timeMs, nowMs, endMs));
+  const hourlyRows = (openMeteo.hourly || []).filter((row) => isInFutureWindow(row.timeMs, nowMs, endMs));
+  const maxMinutelyTimeMs = max(minutelyRows.map((row) => row.timeMs));
+  const rows = [
+    ...minutelyRows,
+    ...hourlyRows.filter((row) => !minutelyRows.length || row.timeMs > maxMinutelyTimeMs)
+  ];
+
+  if (rows.length) {
+    return rows;
+  }
+
+  return (openMeteo.daily || []).filter((row) => isInFutureWindow(row.timeMs, nowMs, endMs));
+}
+
+function pickOpenMeteoTemperature(row) {
+  const min = row?.temperature_2m_min;
+  const max = row?.temperature_2m_max;
+
+  if (Number.isFinite(min) && Number.isFinite(max)) {
+    return round((min + max) / 2, 1);
+  }
+
+  return pickNumber(row?.temperature_2m);
+}
+
+function pickNearestRow(rows, targetMs) {
+  return (rows || [])
+    .filter((row) => Number.isFinite(row.timeMs))
+    .reduce((best, row) => {
+      if (!best) {
+        return row;
+      }
+
+      return Math.abs(row.timeMs - targetMs) < Math.abs(best.timeMs - targetMs) ? row : best;
+    }, null);
+}
+
+function detectForecastDivergence(arome, met, settings) {
+  if (!arome.available || !met.available) {
+    return false;
+  }
+
+  const threshold = settings.rainThresholdMm;
+  const rainDiff = finiteDifference(arome.precipitationMm, met.precipitationMm);
+  const temperatureDiff = finiteDifference(arome.temperatureC, met.temperatureC);
+  const windDiff = finiteDifference(arome.windKmh, met.windKmh);
+  const wetDryMismatch = Number.isFinite(arome.precipitationMm)
+    && Number.isFinite(met.precipitationMm)
+    && ((arome.precipitationMm >= threshold && met.precipitationMm < threshold) || (met.precipitationMm >= threshold && arome.precipitationMm < threshold));
+
+  return wetDryMismatch
+    || (Number.isFinite(rainDiff) && rainDiff >= Math.max(1, threshold * 3))
+    || (Number.isFinite(temperatureDiff) && temperatureDiff >= 3)
+    || (Number.isFinite(windDiff) && windDiff >= 15);
+}
+
+function getWgfConfidence({ primaryAvailable, confirmationAvailable, divergence, state }) {
+  if (!primaryAvailable && !confirmationAvailable) {
+    return "unavailable";
+  }
+
+  if (state !== "fresh") {
+    return "low";
+  }
+
+  if (primaryAvailable && confirmationAvailable && !divergence) {
+    return "high";
+  }
+
+  if (primaryAvailable) {
+    return "medium";
+  }
+
+  return "low";
+}
+
+function buildWgfSummary(precipitationMm, settings) {
+  if (!Number.isFinite(precipitationMm)) {
+    return "Signal incomplet.";
+  }
+
+  if (precipitationMm >= Math.max(5, settings.rainThresholdMm * 10)) {
+    return "Pluie marquee possible.";
+  }
+
+  if (precipitationMm >= settings.rainThresholdMm) {
+    return "Pluie faible possible.";
+  }
+
+  return "Pas de pluie significative.";
+}
+
+function buildWgfReason({ primaryAvailable, confirmationAvailable, divergence, state, observedInputs }) {
+  const observed = observedInputs.length ? " Observation locale fraiche prise en compte." : "";
+
+  if (state !== "fresh") {
+    return `Donnees anciennes ou partielles.${observed}`;
+  }
+
+  if (primaryAvailable && confirmationAvailable && !divergence) {
+    return `AROME et MET Norway sont coherents.${observed}`;
+  }
+
+  if (primaryAvailable && confirmationAvailable && divergence) {
+    return `AROME et MET Norway divergent; confiance reduite.${observed}`;
+  }
+
+  if (primaryAvailable) {
+    return `AROME disponible sans confirmation complete MET Norway.${observed}`;
+  }
+
+  return `MET Norway disponible sans signal AROME exploitable.${observed}`;
+}
+
+function emptyForecastSource(state = "unavailable", freshnessMinutes = null) {
+  return {
+    available: false,
+    state,
+    freshnessMinutes,
+    precipitationMm: null,
+    temperatureC: null,
+    windKmh: null,
+    gustKmh: null
   };
 }
 
@@ -254,11 +589,11 @@ function buildRainHeadline(rainSignal, alertLevel) {
   return "Pas de pluie significative";
 }
 
-function buildRainDetail(rainSignal, alertHorizon) {
+function buildRainDetail(rainSignal, alertHorizon, settings) {
   const risk = ALERT_LABELS[alertHorizon.alertLevel].toLowerCase();
   const score = Math.round(alertHorizon.score * 100);
-  const intensity = rainSignal.intensityMmPerHour === null ? "—" : `${round(rainSignal.intensityMmPerHour, 1)} mm/h`;
-  const precipitation = alertHorizon.precipitationMm === null ? "—" : `${alertHorizon.precipitationMm} mm`;
+  const intensity = formatRainRate(rainSignal.intensityMmPerHour, settings);
+  const precipitation = formatRain(alertHorizon.precipitationMm, settings);
 
   if (rainSignal.activeNow) {
     return `Intensité estimée ${intensity} · cumul prévu ${precipitation} sur ${alertHorizon.minutes} min.`;
@@ -286,8 +621,8 @@ function buildGardenAdvice({ current, rainSignal, alertHorizon, horizonResults, 
       level: highRainLoad ? "risk" : "wet",
       headline: highRainLoad ? "Arrosage inutile, sols à surveiller" : "Arrosage inutile",
       details: [
-        `${rainSignal.intensityLabel} en cours avec environ ${formatNullableNumber(rainSignal.intensityMmPerHour)} mm/h.`,
-        `Cumul possible sur 2 h : ${formatNullableNumber(twoHourRain)} mm.`,
+        `${rainSignal.intensityLabel} en cours avec environ ${formatRainRate(rainSignal.intensityMmPerHour, settings)}.`,
+        `Cumul possible sur 2 h : ${formatRain(twoHourRain, settings)}.`,
         highRainLoad ? "Évite les semis fins, les repiquages fragiles et le travail du sol." : "Bonne pluie d'appoint pour le potager et les plantations récentes."
       ]
     };
@@ -299,7 +634,7 @@ function buildGardenAdvice({ current, rainSignal, alertHorizon, horizonResults, 
       headline: "Arrosage à reporter",
       details: [
         `${rainSignal.intensityLabel === "Pas de pluie" ? "Pluie" : rainSignal.intensityLabel} attendue sur l'horizon ${alertHorizon.minutes} min.`,
-        `Cumul estimé : ${formatNullableNumber(alertHorizon.precipitationMm)} mm sur ${alertHorizon.minutes} min.`,
+        `Cumul estimé : ${formatRain(alertHorizon.precipitationMm, settings)} sur ${alertHorizon.minutes} min.`,
         "Attends la fin de l'épisode avant d'arroser ou de traiter."
       ]
     };
@@ -310,7 +645,7 @@ function buildGardenAdvice({ current, rainSignal, alertHorizon, horizonResults, 
       level: "watch",
       headline: "Surveillance froid utile",
       details: [
-        `Température actuelle : ${formatNullableNumber(current.temperatureC)} °C.`,
+        `Température actuelle : ${formatTemperature(current.temperatureC, settings)}.`,
         "Protège les jeunes plants sensibles si la nuit reste froide.",
         "Pas de pluie significative détectée pour le moment."
       ]
@@ -322,7 +657,7 @@ function buildGardenAdvice({ current, rainSignal, alertHorizon, horizonResults, 
     headline: "Fenêtre jardin possible",
     details: [
       "Pas de pluie significative immédiate.",
-      `Cumul prévu sur 2 h : ${formatNullableNumber(twoHourRain)} mm.`,
+      `Cumul prévu sur 2 h : ${formatRain(twoHourRain, settings)}.`,
       "Arrosage léger possible seulement si le sol est sec en surface."
     ]
   };
@@ -444,6 +779,32 @@ function minutesSince(isoDate) {
   }
 
   return Math.max(0, Math.round((Date.now() - time) / 60_000));
+}
+
+function sourceFreshnessMinutes(source, nowMs) {
+  if (Number.isFinite(source?.freshnessMinutes)) {
+    return source.freshnessMinutes;
+  }
+
+  if (Number.isFinite(source?.ageMinutes)) {
+    return source.ageMinutes;
+  }
+
+  return minutesSinceAt(source?.updatedAt || source?.validityTime || source?.fetchedAt, nowMs);
+}
+
+function minutesSinceAt(isoDate, nowMs) {
+  if (!isoDate) {
+    return null;
+  }
+
+  const time = Date.parse(isoDate);
+
+  if (!Number.isFinite(time) || !Number.isFinite(nowMs)) {
+    return null;
+  }
+
+  return Math.max(0, Math.round((nowMs - time) / 60_000));
 }
 
 function getSourceFreshness(source) {
@@ -706,12 +1067,44 @@ function formatDryWindow(minutes) {
   return `${minutes} min`;
 }
 
-function formatNullableNumber(value) {
+function formatTemperature(valueC, settings) {
+  if (settings.unitSystem === "imperial") {
+    return `${formatNullableNumber(convertCelsiusToFahrenheit(valueC))} °F`;
+  }
+
+  return `${formatNullableNumber(valueC)} °C`;
+}
+
+function formatRain(valueMm, settings) {
+  if (settings.unitSystem === "imperial") {
+    return `${formatNullableNumber(convertMmToInches(valueMm), 2)} in`;
+  }
+
+  return `${formatNullableNumber(valueMm)} mm`;
+}
+
+function formatRainRate(valueMmPerHour, settings) {
+  if (settings.unitSystem === "imperial") {
+    return `${formatNullableNumber(convertMmToInches(valueMmPerHour), 2)} in/h`;
+  }
+
+  return `${formatNullableNumber(valueMmPerHour)} mm/h`;
+}
+
+function convertCelsiusToFahrenheit(value) {
+  return Number.isFinite(value) ? value * 9 / 5 + 32 : null;
+}
+
+function convertMmToInches(value) {
+  return Number.isFinite(value) ? value / 25.4 : null;
+}
+
+function formatNullableNumber(value, digits = 1) {
   if (!Number.isFinite(value)) {
     return "—";
   }
 
-  return String(round(value, 1));
+  return String(round(value, digits));
 }
 
 function capitalize(value) {
@@ -726,8 +1119,31 @@ function max(values) {
   return values.reduce((best, value) => Math.max(best, Number.isFinite(value) ? value : 0), 0);
 }
 
+function sumNullable(values) {
+  const finiteValues = values.filter(Number.isFinite);
+  return finiteValues.length ? round(sum(finiteValues), 2) : null;
+}
+
+function maxNullable(values) {
+  const finiteValues = values.filter(Number.isFinite);
+  return finiteValues.length ? round(Math.max(...finiteValues), 2) : null;
+}
+
+function weightedAverageNullable(items) {
+  const weighted = weightedAverage(items);
+  return weighted.weight ? round(weighted.value, 2) : null;
+}
+
+function finiteDifference(left, right) {
+  return Number.isFinite(left) && Number.isFinite(right) ? Math.abs(left - right) : null;
+}
+
 function pickNumber(...values) {
   return values.find((value) => Number.isFinite(value)) ?? null;
+}
+
+function normalizeUnitSystem(value) {
+  return value === "imperial" ? "imperial" : "metric";
 }
 
 function toPositiveNumber(value, fallback) {

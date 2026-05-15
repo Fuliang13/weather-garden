@@ -29,7 +29,8 @@ export const DEFAULT_GARDEN_ALERT_SETTINGS = {
 export function buildGeneratedGardenAlertsForEntities(entities = [], weatherStatus = null, settings = {}, now = new Date()) {
   const alertSettings = {
     ...DEFAULT_GARDEN_ALERT_SETTINGS,
-    ...pickGardenSettings(settings)
+    ...pickGardenSettings(settings),
+    unitSystem: normalizeUnitSystem(settings.unitSystem)
   };
   const current = weatherStatus?.current || {};
   const station = weatherStatus?.stationObservation?.current || weatherStatus?.observation?.station?.current || {};
@@ -55,7 +56,7 @@ export function buildGeneratedGardenAlertsForEntities(entities = [], weatherStat
         entityId: entity.id,
         headline: temperatureC <= alertSettings.frostRiskTempC ? "Risque de gel" : "Surveillance gel",
         details: [
-          `Température observée ou prévue : ${formatNumber(temperatureC)} °C.`,
+          `Température observée ou prévue : ${formatTemperature(temperatureC, alertSettings)}.`,
           entity.type === "vine" ? "Surveille les jeunes pousses de vigne et les zones exposées." : "Protège les jeunes plants sensibles si la nuit reste froide."
         ],
         now
@@ -71,7 +72,7 @@ export function buildGeneratedGardenAlertsForEntities(entities = [], weatherStat
         entityId: entity.id,
         headline: gustKmh >= alertSettings.windGustRiskKmh ? "Vent fort à risque" : "Vent à surveiller",
         details: [
-          `Rafales observées ou prévues : ${formatNumber(gustKmh)} km/h.`,
+          `Rafales observées ou prévues : ${formatWind(gustKmh, alertSettings)}.`,
           entity.type === "vine" ? "Vérifie le palissage et les rameaux chargés." : "Sécurise les pots, protections et jeunes plantations."
         ],
         now
@@ -87,7 +88,7 @@ export function buildGeneratedGardenAlertsForEntities(entities = [], weatherStat
         entityId: entity.id,
         headline: "Pluie forte à surveiller",
         details: [
-          `Cumul possible sur 2 h : ${formatNumber(twoHourRain)} mm.`,
+          `Cumul possible sur 2 h : ${formatRain(twoHourRain, alertSettings)}.`,
           "Évite les semis fins, les repiquages fragiles et le travail du sol."
         ],
         now
@@ -103,7 +104,7 @@ export function buildGeneratedGardenAlertsForEntities(entities = [], weatherStat
         entityId: entity.id,
         headline: "Surveillance mildiou/oïdium",
         details: [
-          `Humidité : ${formatNumber(humidityPct)} % · pluie sur 2 h : ${formatNumber(twoHourRain)} mm.`,
+          `Humidité : ${formatNumber(humidityPct)} % · pluie sur 2 h : ${formatRain(twoHourRain, alertSettings)}.`,
           "Après l'épisode humide, inspecte les feuilles et grappes dès que possible.",
           "Ne traite pas pendant la pluie ou par vent significatif."
         ],
@@ -121,7 +122,7 @@ export function buildGeneratedGardenAlertsForEntities(entities = [], weatherStat
         headline: "Arrosage à vérifier",
         details: [
           noRainWindowMinutes ? `Pas de pluie significative prévue pendant ${formatDuration(noRainWindowMinutes)}.` : "Pas de pluie significative détectée dans les données disponibles.",
-          Number.isFinite(temperatureC) ? `Température : ${formatNumber(temperatureC)} °C.` : "Vérifie l'humidité du sol avant d'arroser."
+          Number.isFinite(temperatureC) ? `Température : ${formatTemperature(temperatureC, alertSettings)}.` : "Vérifie l'humidité du sol avant d'arroser."
         ],
         now
       }));
@@ -137,7 +138,7 @@ export function buildGeneratedGardenAlertsForEntities(entities = [], weatherStat
         headline: "Fenêtre d'intervention possible",
         details: [
           `Temps sec estimé : ${formatDuration(noRainWindowMinutes)}.`,
-          Number.isFinite(windKmh) ? `Vent moyen : ${formatNumber(windKmh)} km/h.` : "Vent moyen non disponible.",
+          Number.isFinite(windKmh) ? `Vent moyen : ${formatWind(windKmh, alertSettings)}.` : "Vent moyen non disponible.",
           "À confirmer sur place avant taille, traitement ou repiquage."
         ],
         now
@@ -301,12 +302,53 @@ function compareAlertPriority(a, b) {
   return (levels[a.level] ?? 9) - (levels[b.level] ?? 9) || String(a.headline).localeCompare(String(b.headline));
 }
 
-function formatNumber(value) {
+function formatTemperature(valueC, settings) {
+  if (settings.unitSystem === "imperial") {
+    return `${formatNumber(convertCelsiusToFahrenheit(valueC))} °F`;
+  }
+
+  return `${formatNumber(valueC)} °C`;
+}
+
+function formatWind(valueKmh, settings) {
+  if (settings.unitSystem === "imperial") {
+    return `${formatNumber(convertKmhToMph(valueKmh))} mph`;
+  }
+
+  return `${formatNumber(valueKmh)} km/h`;
+}
+
+function formatRain(valueMm, settings) {
+  if (settings.unitSystem === "imperial") {
+    return `${formatNumber(convertMmToInches(valueMm), 2)} in`;
+  }
+
+  return `${formatNumber(valueMm)} mm`;
+}
+
+function normalizeUnitSystem(value) {
+  return value === "imperial" ? "imperial" : "metric";
+}
+
+function convertCelsiusToFahrenheit(value) {
+  return Number.isFinite(value) ? value * 9 / 5 + 32 : null;
+}
+
+function convertKmhToMph(value) {
+  return Number.isFinite(value) ? value / 1.609344 : null;
+}
+
+function convertMmToInches(value) {
+  return Number.isFinite(value) ? value / 25.4 : null;
+}
+
+function formatNumber(value, digits = 1) {
   if (!Number.isFinite(value)) {
     return "—";
   }
 
-  return String(Math.round(value * 10) / 10);
+  const factor = 10 ** digits;
+  return String(Math.round(value * factor) / factor);
 }
 
 function formatDuration(minutes) {

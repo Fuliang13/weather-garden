@@ -74,6 +74,15 @@ npx wrangler secret put NTFY_TOKEN
 
 Dans l'app, active ntfy dans les réglages.
 
+## Unités d’affichage
+
+Les données météo restent normalisées en unités métriques dans le Worker (`temperatureC`, `windKmh`, `pressureHpa`, `rainRateMmPerHour`) afin de garder les alertes et diagnostics cohérents. L’interface peut afficher ces valeurs en métrique ou en non-métrique via le réglage `unitSystem` :
+
+- `metric` : °C, km/h, hPa, mm ;
+- `imperial` : °F, mph, inHg, in.
+
+Les seuils d’alertes restent stockés en unités métriques.
+
 ## Météo-France radar
 
 Crée un compte sur le portail API Météo-France, puis souscris à l'API Données Radar.

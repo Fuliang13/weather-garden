@@ -25,6 +25,7 @@ export const GARDEN_ENTITY_TYPES = [
 ];
 
 const GARDEN_GEOJSON_GEOMETRY_TYPES = ["Point", "LineString", "Polygon"];
+const GARDEN_SENSOR_SOURCES = ["ecowitt"];
 
 export const DEFAULT_GARDEN_STATE = {
   version: 1,
@@ -55,7 +56,36 @@ export function createDefaultGardenState(now = new Date()) {
         type: "weather_station",
         name: "Station météo locale",
         tags: ["ecowitt", "meteo"],
-        notes: "Observation locale utilisée pour comparer les modèles météo."
+        notes: "Observation locale utilisée pour comparer les modèles météo.",
+        sensors: [
+          {
+            id: "ecowitt-temperature-24h",
+            source: "ecowitt",
+            externalId: "station-locale",
+            label: "Température locale 24 h",
+            metric: "temperatureC",
+            enabled: true,
+            seriesKey: "temperatureC.24h"
+          },
+          {
+            id: "ecowitt-humidity-24h",
+            source: "ecowitt",
+            externalId: "station-locale",
+            label: "Humidité locale 24 h",
+            metric: "humidityPct",
+            enabled: true,
+            seriesKey: "humidityPct.24h"
+          },
+          {
+            id: "ecowitt-rain-24h",
+            source: "ecowitt",
+            externalId: "station-locale",
+            label: "Pluie locale 24 h",
+            metric: "dailyRainMm",
+            enabled: true,
+            seriesKey: "rain.24h"
+          }
+        ]
       }
     ],
     alerts: []
@@ -173,7 +203,47 @@ function normalizeGardenEntity(entity) {
     photos: toArray(entity.photos).filter(isPlainObject),
     metadata: normalizeObject(entity.metadata),
     state: normalizeObject(entity.state),
+    sensors: normalizeSensorReferences(entity.sensors),
     rules: toArray(entity.rules).filter(isPlainObject)
+  };
+}
+
+function normalizeSensorReferences(value) {
+  return toArray(value).map(normalizeSensorReference).filter(Boolean);
+}
+
+function normalizeSensorReference(sensor) {
+  if (!isPlainObject(sensor)) {
+    return null;
+  }
+
+  const source = normalizeText(sensor.source).toLowerCase();
+  const metric = normalizeText(sensor.metric);
+
+  if (!GARDEN_SENSOR_SOURCES.includes(source) || !metric) {
+    return null;
+  }
+
+  const externalId = normalizeSensorText(sensor.externalId);
+  const channel = normalizeSensorText(sensor.channel);
+  const path = normalizeSensorText(sensor.path);
+  const seriesKey = normalizeSensorText(sensor.seriesKey);
+  const id = normalizeId(sensor.id) || normalizeId([source, externalId, channel, metric, seriesKey].filter(Boolean).join("-"));
+
+  if (!id || [sensor.id, sensor.externalId, sensor.channel, sensor.path, sensor.seriesKey].some(hasSensitiveDeviceIdentifier)) {
+    return null;
+  }
+
+  return {
+    id,
+    source,
+    externalId,
+    label: normalizeText(sensor.label),
+    metric,
+    enabled: sensor.enabled === undefined ? true : sensor.enabled === true,
+    channel,
+    path,
+    seriesKey
   };
 }
 
@@ -220,6 +290,11 @@ function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizeSensorText(value) {
+  const text = normalizeText(value);
+  return text && !hasSensitiveDeviceIdentifier(text) ? text : "";
+}
+
 function normalizeId(value) {
   if (typeof value !== "string") {
     return null;
@@ -231,6 +306,17 @@ function normalizeId(value) {
 
 function normalizeObject(value) {
   return isPlainObject(value) ? value : {};
+}
+
+function hasSensitiveDeviceIdentifier(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const text = value.trim();
+  return /(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}/i.test(text)
+    || /\b[0-9a-f]{12}\b/i.test(text)
+    || /\b\d{15,}\b/.test(text);
 }
 
 function isPlainObject(value) {

@@ -4,6 +4,8 @@ const state = {
   status: null,
   gardenState: null,
   gardenLoadError: null,
+  ecowittDiagnostics: null,
+  ecowittLoadError: null,
   selectedGardenEntityId: null,
   gardenDirty: false,
   gardenMap: null,
@@ -18,7 +20,8 @@ const state = {
   refreshTimer: null,
   countdownTimer: null,
   nextRefreshAt: null,
-  isLoading: false
+  isLoading: false,
+  unitSystem: "metric"
 };
 
 const els = {
@@ -47,6 +50,9 @@ const els = {
   gust: document.querySelector("#gust"),
   horizonsCard: document.querySelector("#horizonsCard"),
   horizons: document.querySelector("#horizons"),
+  forecastComparisonCard: document.querySelector("#forecastComparisonCard"),
+  forecastComparisonGeneratedAt: document.querySelector("#forecastComparisonGeneratedAt"),
+  forecastComparisonBody: document.querySelector("#forecastComparisonBody"),
   gardenCard: document.querySelector("#gardenCard"),
   gardenBadge: document.querySelector("#gardenBadge"),
   gardenSummary: document.querySelector("#gardenSummary"),
@@ -125,8 +131,14 @@ async function loadStatus(forceRefresh) {
       throw new Error(status.error || "Erreur météo");
     }
 
+    const [gardenState, ecowittDiagnostics] = await Promise.all([
+      fetchGardenState(),
+      fetchEcowittDiagnostics()
+    ]);
+
     state.status = status;
-    state.gardenState = await fetchGardenState();
+    state.gardenState = gardenState;
+    state.ecowittDiagnostics = ecowittDiagnostics;
     renderStatus(status);
     scheduleNextRefresh();
   } catch (error) {
@@ -167,10 +179,28 @@ async function fetchGardenState() {
   }
 }
 
+async function fetchEcowittDiagnostics() {
+  try {
+    const response = await fetch("/api/debug/ecowitt");
+    const diagnostics = await readJsonResponse(response);
+
+    if (!response.ok || diagnostics.ok === false) {
+      throw new Error(diagnostics.error || diagnostics.message || "Historique Ecowitt indisponible.");
+    }
+
+    state.ecowittLoadError = null;
+    return diagnostics;
+  } catch (error) {
+    state.ecowittLoadError = error;
+    return null;
+  }
+}
+
 async function saveSettings(event) {
   event.preventDefault();
   const formData = new FormData(els.settingsForm);
   const settings = {
+    unitSystem: normalizeUnitSystem(formData.get("unitSystem")),
     rainThresholdMm: Number(formData.get("rainThresholdMm")),
     rainAlertMinutes: Number(formData.get("rainAlertMinutes")),
     minConfidence: Number(formData.get("minConfidence")),
@@ -346,6 +376,7 @@ async function readJsonResponse(response) {
 }
 
 function renderStatus(status) {
+  state.unitSystem = normalizeUnitSystem(status.settings?.unitSystem);
   const rain = status.rain || {};
   const noSignificantRain = isNoSignificantRain(rain);
   els.location.textContent = `${status.location.name} · ${formatCoord(status.location.latitude)}, ${formatCoord(status.location.longitude)}`;
@@ -360,6 +391,7 @@ function renderStatus(status) {
   renderStationObservation(status.stationObservation || status.observation?.station || null);
   renderCurrentForecast(status.current);
   renderHorizons(rain.horizons || [], noSignificantRain);
+  renderForecastComparison(status.forecastComparison);
   renderGarden(rain.garden, status.garden);
   renderGardenWorkspace(getGardenEntities(status), status.location);
   renderGardenAlerts(status.garden?.alerts);
@@ -381,7 +413,7 @@ function renderRainMeta(rain) {
   els.rainMeta.hidden = false;
 
   [
-    { label: "Intensité", value: `${rain.intensityLabel} · ${formatValue(rain.intensityMmPerHour, "mm/h")}` },
+    { label: "Intensité", value: `${rain.intensityLabel} · ${formatRainRate(rain.intensityMmPerHour)}` },
     { label: "Risque", value: `${rain.riskLabel} · ${rain.horizons?.[0] ? Math.round(rain.horizons[0].score * 100) : 0} % à 30 min` },
     { label: "Durée", value: rain.expectedDurationMinutes ? formatDuration(rain.expectedDurationMinutes) : "non déterminée" },
     { label: "Source", value: rain.observation?.source === "station" ? "station locale" : "prévision" }
@@ -419,21 +451,21 @@ function renderStationObservation(station) {
   els.stationCard.hidden = false;
   els.stationCard.dataset.stale = String(!!station.stale);
   els.stationSource.textContent = `${station.label || uiText("@{%Station météo%}")}${station.updatedAt ? ` · ${formatDate(station.updatedAt)}` : ""}${station.stale ? " · données anciennes" : ""}`;
-  els.stationTemperature.textContent = formatValue(current.temperatureC, "°C");
+  els.stationTemperature.textContent = formatTemperature(current.temperatureC);
   els.stationHumidity.textContent = formatValue(current.humidityPct, "%");
-  els.stationWind.textContent = formatValue(current.windKmh, "km/h");
-  els.stationGust.textContent = formatValue(current.gustKmh, "km/h");
-  els.stationPressure.textContent = formatValue(current.pressureHpa, "hPa");
-  els.stationRain.textContent = `${formatValue(current.rainRateMmPerHour, "mm/h")} · jour ${formatValue(current.dailyRainMm, "mm")}`;
+  els.stationWind.textContent = formatWind(current.windKmh);
+  els.stationGust.textContent = formatWind(current.gustKmh);
+  els.stationPressure.textContent = formatPressure(current.pressureHpa);
+  els.stationRain.textContent = `${formatRainRate(current.rainRateMmPerHour)} · jour ${formatRain(current.dailyRainMm)}`;
   els.stationUv.textContent = `${formatValue(current.uvIndex, "")} · ${formatValue(current.solarWm2, "W/m²")}`;
 }
 
 function renderCurrentForecast(current) {
   els.currentSource.textContent = current?.sourceLabel || "Prévision immédiate · Open-Meteo AROME / MET Norway";
-  els.temperature.textContent = formatValue(current?.temperatureC, "°C");
+  els.temperature.textContent = formatTemperature(current?.temperatureC);
   els.humidity.textContent = formatValue(current?.humidityPct, "%");
-  els.wind.textContent = formatValue(current?.windKmh, "km/h");
-  els.gust.textContent = formatValue(current?.gustKmh, "km/h");
+  els.wind.textContent = formatWind(current?.windKmh);
+  els.gust.textContent = formatWind(current?.gustKmh);
 }
 
 function renderHorizons(horizons, noSignificantRain) {
@@ -451,11 +483,208 @@ function renderHorizons(horizons, noSignificantRain) {
     row.innerHTML = `
       <strong>${formatDuration(item.minutes)}</strong>
       <span>${item.intensityLabel}</span>
-      <span>${formatValue(item.intensityMmPerHour, "mm/h")}</span>
-      <span>${formatValue(item.precipitationMm, "mm")}</span>
+      <span>${formatRainRate(item.intensityMmPerHour)}</span>
+      <span>${formatRain(item.precipitationMm)}</span>
     `;
     els.horizons.append(row);
   });
+}
+
+function renderForecastComparison(comparison) {
+  if (!els.forecastComparisonBody) {
+    return;
+  }
+
+  const horizons = Array.isArray(comparison?.horizons) ? comparison.horizons : [];
+  els.forecastComparisonCard.hidden = false;
+  els.forecastComparisonGeneratedAt.textContent = comparison?.generatedAt
+    ? `Weather Garden Forecast · généré le ${formatDate(comparison.generatedAt)}`
+    : "Weather Garden Forecast · comparatif indisponible";
+  els.forecastComparisonBody.innerHTML = "";
+
+  if (!horizons.length) {
+    const empty = document.createElement("p");
+    empty.className = "forecast-comparison-empty";
+    empty.textContent = comparison ? "Aucun horizon de comparaison disponible." : "Comparatif des prévisions indisponible.";
+    els.forecastComparisonBody.append(empty);
+    return;
+  }
+
+  const header = document.createElement("div");
+  header.className = "forecast-comparison-header";
+  ["Horizon", "AROME", "MET Norway", "WGF"].forEach((label) => {
+    const item = document.createElement("span");
+    item.textContent = label;
+    header.append(item);
+  });
+  els.forecastComparisonBody.append(header);
+
+  horizons.forEach((horizon) => {
+    const row = document.createElement("article");
+    const horizonLabel = document.createElement("strong");
+
+    row.className = "forecast-comparison-row";
+    horizonLabel.className = "forecast-comparison-horizon";
+    horizonLabel.textContent = horizon.label || formatDuration(horizon.minutes);
+
+    row.append(
+      horizonLabel,
+      buildForecastSourceCell("AROME", horizon.sources?.arome),
+      buildForecastSourceCell("MET Norway", horizon.sources?.metNorway),
+      buildForecastSourceCell("WGF", horizon.sources?.wgf, true)
+    );
+    els.forecastComparisonBody.append(row);
+  });
+}
+
+function buildForecastSourceCell(label, source, isWgf = false) {
+  const cell = document.createElement("div");
+  const cellLabel = document.createElement("span");
+  const status = document.createElement("span");
+  const body = document.createElement("span");
+  const reason = document.createElement("small");
+
+  cell.className = `forecast-source-cell${isWgf ? " forecast-source-wgf" : ""}`;
+  cell.dataset.state = source?.state || "unavailable";
+  cellLabel.className = "forecast-cell-label";
+  cellLabel.textContent = label;
+  status.className = "forecast-source-state";
+  status.textContent = formatForecastState(source);
+  body.className = "forecast-source-main";
+  body.textContent = formatForecastSourceMain(source, isWgf);
+  reason.className = "forecast-source-reason";
+
+  cell.append(cellLabel, status, body);
+
+  if (isWgf) {
+    appendWgfReason(reason, source);
+  } else {
+    reason.textContent = formatFreshness(source);
+  }
+
+  if (reason.textContent || reason.children.length) {
+    cell.append(reason);
+  }
+
+  return cell;
+}
+
+function formatForecastSourceMain(source, isWgf) {
+  if (!source?.available) {
+    return "Indisponible";
+  }
+
+  if (isWgf) {
+    const confidence = formatWgfConfidence(source.confidence);
+    return [source.summary || "Signal WGF disponible", confidence ? `confiance ${confidence}` : ""]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  return [
+    formatForecastRain(source.precipitationMm),
+    formatTemperature(source.temperatureC),
+    `vent ${formatWind(source.windKmh)}`,
+    Number.isFinite(source.gustKmh) ? `rafales ${formatWind(source.gustKmh)}` : ""
+  ].filter(Boolean).join(" · ");
+}
+
+function formatForecastRain(value) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+
+  return value < 0.05 ? "sec" : formatRain(value);
+}
+
+function formatForecastState(source) {
+  if (!source?.available || source.state === "unavailable") {
+    return "Indisponible";
+  }
+
+  if (source.state === "stale") {
+    return "Ancien";
+  }
+
+  if (source.state === "fresh") {
+    return "OK";
+  }
+
+  return "OK";
+}
+
+function formatFreshness(source) {
+  if (!Number.isFinite(source?.freshnessMinutes)) {
+    return "";
+  }
+
+  return `âge ${formatDuration(source.freshnessMinutes)}`;
+}
+
+function formatWgfConfidence(value) {
+  return {
+    high: "forte",
+    medium: "moyenne",
+    low: "faible",
+    unavailable: "indisponible"
+  }[value] || "";
+}
+
+function appendWgfReason(container, source) {
+  const label = document.createElement("span");
+  const detail = document.createElement("span");
+
+  label.className = "forecast-reason-label";
+  label.textContent = formatWgfReasonLabel(source);
+  detail.className = "forecast-reason-detail";
+  detail.textContent = formatWgfReason(source);
+  container.append(label);
+
+  if (detail.textContent && detail.textContent !== label.textContent) {
+    container.append(detail);
+  }
+}
+
+function formatWgfReasonLabel(source) {
+  const reason = String(source?.reason || "").toLowerCase();
+
+  if (!source?.available) {
+    return "WGF indisponible";
+  }
+
+  if (reason.includes("diverg")) {
+    return "Modèles divergents";
+  }
+
+  if (reason.includes("ancienne") || reason.includes("partielle")) {
+    return "Sources partielles";
+  }
+
+  if (reason.includes("coherent")) {
+    return "Sources cohérentes";
+  }
+
+  if (reason.includes("arome disponible")) {
+    return "AROME prioritaire";
+  }
+
+  if (reason.includes("met norway disponible")) {
+    return "MET Norway seul";
+  }
+
+  if (reason.includes("observation locale")) {
+    return "Observation locale incluse";
+  }
+
+  return "Signal consolidé";
+}
+
+function formatWgfReason(source) {
+  if (!source?.available) {
+    return source?.reason || "Aucune prévision locale consolidée disponible.";
+  }
+
+  return source.reason || "";
 }
 
 function renderGarden(garden, gardenState) {
@@ -519,6 +748,7 @@ function renderGardenEntityRows(entities) {
     button.innerHTML = `
       <strong>${escapeHtml(entity.name)}</strong>
       <span>${escapeHtml(formatGardenEntityMeta(entity))}</span>
+      ${isLocalStationEntity(entity) ? `<span class="garden-entity-badges"><span class="garden-mini-badge" data-state="${escapeHtml(getLocalStationBadgeState(entity))}">${escapeHtml(formatLocalStationStateLabel(entity))}</span></span>` : ""}
     `;
     button.addEventListener("click", () => selectGardenEntity(entity.id));
 
@@ -557,6 +787,7 @@ function renderGardenEntityDetail(entities) {
       <div><dt>Position</dt><dd>${escapeHtml(formatGardenPosition(selected))}</dd></div>
       <div><dt>Notes</dt><dd>${escapeHtml(selected.notes || "Aucune note")}</dd></div>
     </dl>
+    ${isLocalStationEntity(selected) ? buildLocalStationPanel(selected) : ""}
   `;
   els.deleteGardenEntityButton.disabled = false;
 }
@@ -642,21 +873,24 @@ function updateGardenLayers(entities) {
 
 function createGardenEntityLayer(entity) {
   const geometry = entity.position?.geometry;
+  const popupLabel = isLocalStationEntity(entity)
+    ? `Station météo locale · ${formatLocalStationStateLabel(entity)}`
+    : entity.name;
 
   if (geometry?.type === "Point") {
-    return window.L.marker([geometry.coordinates[1], geometry.coordinates[0]]).bindPopup(entity.name);
+    return window.L.marker([geometry.coordinates[1], geometry.coordinates[0]], getGardenMarkerOptions(entity)).bindPopup(popupLabel);
   }
 
   if (geometry?.type === "LineString") {
-    return window.L.polyline(geometry.coordinates.map(toLatLng), getGardenVectorStyle(entity)).bindPopup(entity.name);
+    return window.L.polyline(geometry.coordinates.map(toLatLng), getGardenVectorStyle(entity)).bindPopup(popupLabel);
   }
 
   if (geometry?.type === "Polygon") {
-    return window.L.polygon(geometry.coordinates.map((ring) => ring.map(toLatLng)), getGardenVectorStyle(entity)).bindPopup(entity.name);
+    return window.L.polygon(geometry.coordinates.map((ring) => ring.map(toLatLng)), getGardenVectorStyle(entity)).bindPopup(popupLabel);
   }
 
   if (Number.isFinite(entity.position?.latitude) && Number.isFinite(entity.position?.longitude)) {
-    return window.L.marker([entity.position.latitude, entity.position.longitude]).bindPopup(entity.name);
+    return window.L.marker([entity.position.latitude, entity.position.longitude], getGardenMarkerOptions(entity)).bindPopup(popupLabel);
   }
 
   return null;
@@ -760,6 +994,10 @@ function formatGardenEntityMeta(entity) {
     parts.push(entity.position.label);
   }
 
+  if (isLocalStationEntity(entity) && !hasGardenMapPosition(entity)) {
+    parts.push("Sans position");
+  }
+
   return parts.join(" - ");
 }
 
@@ -780,12 +1018,38 @@ function formatGardenPosition(entity) {
 }
 
 function getGardenVectorStyle(entity) {
+  if (isLocalStationEntity(entity)) {
+    return {
+      color: entity.id === state.selectedGardenEntityId ? "#1b4332" : "#3a6f78",
+      fillColor: "#9bc3bd",
+      fillOpacity: 0.25,
+      opacity: 0.95,
+      weight: entity.id === state.selectedGardenEntityId ? 4 : 2
+    };
+  }
+
   return {
     color: entity.id === state.selectedGardenEntityId ? "#1b4332" : "#2d6a4f",
     fillColor: "#74c69d",
     fillOpacity: 0.22,
     opacity: 0.9,
     weight: entity.id === state.selectedGardenEntityId ? 4 : 2
+  };
+}
+
+function getGardenMarkerOptions(entity) {
+  if (!isLocalStationEntity(entity)) {
+    return {};
+  }
+
+  return {
+    icon: window.L.divIcon({
+      className: "garden-station-marker",
+      html: `<span aria-hidden="true"></span>`,
+      iconSize: [28, 28],
+      iconAnchor: [14, 14],
+      popupAnchor: [0, -14]
+    })
   };
 }
 
@@ -841,6 +1105,222 @@ function toLatLng(coordinates) {
   return Array.isArray(coordinates) && coordinates.length >= 2
     ? [Number(coordinates[1]), Number(coordinates[0])]
     : null;
+}
+
+function isLocalStationEntity(entity) {
+  return entity?.id === "station-locale" || entity?.type === "weather_station" && entity?.tags?.includes("ecowitt");
+}
+
+function hasGardenMapPosition(entity) {
+  const geometry = entity?.position?.geometry;
+  return Number.isFinite(entity?.position?.latitude) && Number.isFinite(entity?.position?.longitude)
+    || geometry?.type === "Point"
+    || geometry?.type === "LineString"
+    || geometry?.type === "Polygon";
+}
+
+function getLocalStationObservation() {
+  return state.status?.stationObservation || state.status?.observation?.station || state.ecowittDiagnostics?.current || null;
+}
+
+function getLocalStationSourceStatus() {
+  return state.status?.sources?.find((source) => source.id === "ecowitt") || null;
+}
+
+function getLocalStationState() {
+  const observation = getLocalStationObservation();
+  const source = getLocalStationSourceStatus();
+
+  if (observation?.state) {
+    return observation.state;
+  }
+
+  if (source?.state) {
+    return source.state;
+  }
+
+  if (state.ecowittLoadError) {
+    return "unavailable";
+  }
+
+  return "unavailable";
+}
+
+function formatLocalStationStateLabel(entity) {
+  if (!hasGardenMapPosition(entity)) {
+    return "Sans position";
+  }
+
+  const stateLabel = getLocalStationState();
+
+  if (stateLabel === "fresh") {
+    return "Fraîche";
+  }
+
+  if (stateLabel === "stale") {
+    return "Ancienne";
+  }
+
+  return "Indisponible";
+}
+
+function getLocalStationBadgeState(entity) {
+  return hasGardenMapPosition(entity) ? getLocalStationState() : "no-position";
+}
+
+function buildLocalStationPanel(entity) {
+  const observation = getLocalStationObservation();
+  const current = observation?.current || {};
+  const stateLabel = formatLocalStationStateLabel(entity);
+  const historyWindow = state.ecowittDiagnostics?.history?.windows?.last24h || observation?.history?.windows?.last24h || null;
+  const charts = buildLocalStationCharts(historyWindow);
+  const historyMessage = getLocalStationHistoryMessage(historyWindow);
+
+  return `
+    <section class="garden-station-panel" aria-label="Station météo locale">
+      <div class="garden-station-heading">
+        <strong>Station météo locale</strong>
+        <span class="garden-mini-badge" data-state="${escapeHtml(getLocalStationBadgeState(entity))}">${escapeHtml(stateLabel)}</span>
+      </div>
+      <dl class="garden-station-metrics">
+        <div><dt>Température</dt><dd>${escapeHtml(formatTemperature(current.temperatureC))}</dd></div>
+        <div><dt>Humidité</dt><dd>${escapeHtml(formatValue(current.humidityPct, "%"))}</dd></div>
+        <div><dt>Vent</dt><dd>${escapeHtml(formatWind(current.windKmh))}</dd></div>
+        <div><dt>Rafales</dt><dd>${escapeHtml(formatWind(current.gustKmh))}</dd></div>
+        <div><dt>Pluie actuelle</dt><dd>${escapeHtml(formatRainRate(current.rainRateMmPerHour))}</dd></div>
+        <div><dt>Pluie journalière</dt><dd>${escapeHtml(formatRain(current.dailyRainMm))}</dd></div>
+        <div><dt>Pression</dt><dd>${escapeHtml(formatPressure(current.pressureHpa))}</dd></div>
+        <div><dt>UV</dt><dd>${escapeHtml(formatValue(current.uvIndex, ""))}</dd></div>
+        <div><dt>Solaire</dt><dd>${escapeHtml(formatValue(current.solarWm2, "W/m²"))}</dd></div>
+        <div><dt>Dernière mise à jour</dt><dd>${escapeHtml(formatDate(observation?.updatedAt || observation?.fetchedAt))}</dd></div>
+        <div><dt>État</dt><dd>${escapeHtml(formatLocalStationStateLabel(entity))}</dd></div>
+      </dl>
+      <div class="garden-station-history">
+        <h4>Historique Ecowitt</h4>
+        ${charts || `<p class="garden-state-note">${escapeHtml(historyMessage)}</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function buildLocalStationCharts(historyWindow) {
+  if (!historyWindow?.ok || !historyWindow.series) {
+    return "";
+  }
+
+  const charts = [
+    buildSparklineChart("Température 24 h", historyWindow.series.temperatureC, "°C", "line"),
+    buildSparklineChart("Humidité 24 h", historyWindow.series.humidityPct, "%", "line"),
+    buildSparklineChart("Pluie 24 h", historyWindow.series.rainMm, "mm", "bar"),
+    buildSparklineChart("Vent 24 h", historyWindow.series.windKmh, "km/h", "line"),
+    buildFirstChannelChart("Humidité sol", historyWindow.series.soilMoisture, "%"),
+    buildFirstChannelChart("Leaf wetness", historyWindow.series.leafWetness, "%")
+  ].filter(Boolean);
+
+  return charts.length ? `<div class="garden-station-charts">${charts.join("")}</div>` : "";
+}
+
+function buildFirstChannelChart(title, channels, unit) {
+  const channelKey = Object.keys(channels || {}).find((key) => hasUsableSeries(channels[key]));
+
+  if (!channelKey) {
+    return "";
+  }
+
+  return buildSparklineChart(`${title} ${channelKey}`, channels[channelKey], unit, "line");
+}
+
+function buildSparklineChart(title, series, unit, type = "line") {
+  const values = normalizeChartSeries(series);
+
+  if (!values.length) {
+    return "";
+  }
+
+  const numericValues = values.map((point) => point.value).filter(Number.isFinite);
+  const min = Math.min(...numericValues);
+  const max = Math.max(...numericValues);
+  const latest = numericValues[numericValues.length - 1];
+  const svg = type === "bar" ? renderBarChart(values, min, max) : renderLineChart(values, min, max);
+
+  return `
+    <article class="garden-station-chart">
+      <div class="garden-chart-header">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(formatValue(latest, unit))}</span>
+      </div>
+      ${svg}
+    </article>
+  `;
+}
+
+function normalizeChartSeries(series) {
+  return (Array.isArray(series) ? series : [])
+    .map((point, index) => ({
+      index,
+      time: point?.time || null,
+      value: Number(point?.value)
+    }))
+    .filter((point) => Number.isFinite(point.value));
+}
+
+function hasUsableSeries(series) {
+  return normalizeChartSeries(series).length > 0;
+}
+
+function renderLineChart(values, min, max) {
+  const points = values.map((point, index) => `${chartX(index, values.length)},${chartY(point.value, min, max)}`).join(" ");
+  return `
+    <svg class="garden-chart-svg" viewBox="0 0 120 42" role="img" aria-label="Graphique simple">
+      <polyline points="${points}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+    </svg>
+  `;
+}
+
+function renderBarChart(values, min, max) {
+  const width = Math.max(2, 96 / values.length);
+  const bars = values.map((point, index) => {
+    const height = Math.max(1, 38 - chartY(point.value, min, max));
+    return `<rect x="${chartX(index, values.length) - width / 2}" y="${40 - height}" width="${width}" height="${height}" rx="1"></rect>`;
+  }).join("");
+
+  return `
+    <svg class="garden-chart-svg garden-chart-bars" viewBox="0 0 120 42" role="img" aria-label="Graphique pluie simple">
+      ${bars}
+    </svg>
+  `;
+}
+
+function chartX(index, length) {
+  return length <= 1 ? 60 : 10 + index * (100 / (length - 1));
+}
+
+function chartY(value, min, max) {
+  if (max === min) {
+    return 21;
+  }
+
+  return 38 - ((value - min) / (max - min)) * 34;
+}
+
+function getLocalStationHistoryMessage(historyWindow) {
+  if (state.ecowittLoadError) {
+    return "Historique Ecowitt non chargé.";
+  }
+
+  if (!state.ecowittDiagnostics) {
+    return "Ecowitt non configuré ou indisponible.";
+  }
+
+  if (!historyWindow) {
+    return "Historique 24 h absent.";
+  }
+
+  if (!historyWindow.ok) {
+    return historyWindow.message || "Historique 24 h indisponible.";
+  }
+
+  return "Aucune série exploitable dans l'historique 24 h.";
 }
 
 function escapeHtml(value) {
@@ -1015,6 +1495,7 @@ function renderSources(sources) {
 }
 
 function renderSettings(settings) {
+  setFieldValue("unitSystem", normalizeUnitSystem(settings.unitSystem));
   setFieldValue("rainThresholdMm", settings.rainThresholdMm);
   setFieldValue("rainAlertMinutes", settings.rainAlertMinutes);
   setFieldValue("minConfidence", settings.minConfidence);
@@ -1172,13 +1653,74 @@ function updateRefreshCountdown() {
   els.refreshStatus.textContent = `Prochaine mise à jour dans ${formatCountdown(remainingSeconds)}.`;
 }
 
-function formatValue(value, unit) {
+function formatTemperature(valueC) {
+  if (state.unitSystem === "imperial") {
+    return formatValue(convertCelsiusToFahrenheit(valueC), "°F");
+  }
+
+  return formatValue(valueC, "°C");
+}
+
+function formatWind(valueKmh) {
+  if (state.unitSystem === "imperial") {
+    return formatValue(convertKmhToMph(valueKmh), "mph");
+  }
+
+  return formatValue(valueKmh, "km/h");
+}
+
+function formatPressure(valueHpa) {
+  if (state.unitSystem === "imperial") {
+    return formatValue(convertHpaToInHg(valueHpa), "inHg", 2);
+  }
+
+  return formatValue(valueHpa, "hPa");
+}
+
+function formatRain(valueMm) {
+  if (state.unitSystem === "imperial") {
+    return formatValue(convertMmToInches(valueMm), "in", 2);
+  }
+
+  return formatValue(valueMm, "mm");
+}
+
+function formatRainRate(valueMmPerHour) {
+  if (state.unitSystem === "imperial") {
+    return formatValue(convertMmToInches(valueMmPerHour), "in/h", 2);
+  }
+
+  return formatValue(valueMmPerHour, "mm/h");
+}
+
+function normalizeUnitSystem(value) {
+  return value === "imperial" ? "imperial" : "metric";
+}
+
+function convertCelsiusToFahrenheit(value) {
+  return Number.isFinite(value) ? value * 9 / 5 + 32 : null;
+}
+
+function convertKmhToMph(value) {
+  return Number.isFinite(value) ? value / 1.609344 : null;
+}
+
+function convertHpaToInHg(value) {
+  return Number.isFinite(value) ? value / 33.8638866667 : null;
+}
+
+function convertMmToInches(value) {
+  return Number.isFinite(value) ? value / 25.4 : null;
+}
+
+function formatValue(value, unit, digits = 1) {
   if (!Number.isFinite(value)) {
     return "—";
   }
 
+  const factor = 10 ** digits;
   const suffix = unit ? ` ${unit}` : "";
-  return `${Math.round(value * 10) / 10}${suffix}`;
+  return `${Math.round(value * factor) / factor}${suffix}`;
 }
 
 function formatDate(value) {

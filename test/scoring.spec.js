@@ -168,4 +168,134 @@ describe("weather scoring", () => {
     expect(status.sources.find((item) => item.id === "open-meteo-arome").status).toBe("fresh");
     expect(status.sources.find((item) => item.id === "met-norway").status).toBe("unavailable");
   });
+
+  it("adds a public AROME / MET Norway / WGF comparison for the required horizons", () => {
+    const now = new Date("2026-05-06T12:00:00.000Z");
+    const status = buildWeatherStatus({
+      location: DEFAULT_LOCATION,
+      settings: DEFAULT_SETTINGS,
+      openMeteo: buildOpenMeteoForecast(now, { precipitationMm: 0.2, temperatureC: 12, windKmh: 8, gustKmh: 18 }),
+      metNorway: buildMetNorwayForecast(now, { precipitationMm: 0.2, temperatureC: 12.3, windKmh: 9, gustKmh: 17 }),
+      meteoFranceRadar: null,
+      rainViewer: { ok: true, imageUrl: "https://example.test/rainviewer-token-should-not-matter.png" },
+      now
+    });
+    const keys = status.forecastComparison.horizons.map((horizon) => horizon.key);
+    const oneHour = status.forecastComparison.horizons.find((horizon) => horizon.key === "1h");
+
+    expect(status.forecastComparison.generatedAt).toBe(now.toISOString());
+    expect(keys).toEqual(["minutecast", "1h", "2h", "4h", "8h", "1d", "2d"]);
+    expect(oneHour.sources.arome).toMatchObject({ available: true, state: "fresh" });
+    expect(oneHour.sources.metNorway).toMatchObject({ available: true, state: "fresh" });
+    expect(oneHour.sources.arome.precipitationMm).toBeGreaterThan(0);
+    expect(oneHour.sources.metNorway.precipitationMm).toBeGreaterThan(0);
+    expect(oneHour.sources.wgf).toMatchObject({
+      available: true,
+      state: "fresh",
+      confidence: "high"
+    });
+    expect(JSON.stringify(status.forecastComparison)).not.toContain("rainviewer-token");
+  });
+
+  it("reduces WGF confidence when AROME and MET Norway diverge", () => {
+    const now = new Date("2026-05-06T12:00:00.000Z");
+    const status = buildWeatherStatus({
+      location: DEFAULT_LOCATION,
+      settings: DEFAULT_SETTINGS,
+      openMeteo: buildOpenMeteoForecast(now, { precipitationMm: 1.4, temperatureC: 12, windKmh: 8, gustKmh: 18 }),
+      metNorway: buildMetNorwayForecast(now, { precipitationMm: 0, temperatureC: 12.2, windKmh: 9, gustKmh: 17 }),
+      meteoFranceRadar: null,
+      rainViewer: null,
+      now
+    });
+    const oneHour = status.forecastComparison.horizons.find((horizon) => horizon.key === "1h");
+
+    expect(oneHour.sources.wgf.confidence).toBe("medium");
+    expect(oneHour.sources.wgf.reason).toContain("divergent");
+  });
+
+  it("keeps missing forecast sources explicit and does not invent WGF values", () => {
+    const now = new Date("2026-05-06T12:00:00.000Z");
+    const status = buildWeatherStatus({
+      location: DEFAULT_LOCATION,
+      settings: DEFAULT_SETTINGS,
+      openMeteo: null,
+      metNorway: null,
+      meteoFranceRadar: null,
+      rainViewer: null,
+      now
+    });
+    const oneHour = status.forecastComparison.horizons.find((horizon) => horizon.key === "1h");
+
+    expect(oneHour.sources.arome).toMatchObject({
+      available: false,
+      state: "unavailable",
+      precipitationMm: null,
+      temperatureC: null,
+      windKmh: null,
+      gustKmh: null
+    });
+    expect(oneHour.sources.metNorway.available).toBe(false);
+    expect(oneHour.sources.wgf).toMatchObject({
+      available: false,
+      state: "unavailable",
+      precipitationMm: null,
+      temperatureC: null,
+      windKmh: null,
+      gustKmh: null,
+      confidence: "unavailable"
+    });
+  });
 });
+
+function buildOpenMeteoForecast(now, { precipitationMm, temperatureC, windKmh, gustKmh }) {
+  return {
+    ok: true,
+    fetchedAt: now.toISOString(),
+    current: {
+      temperature_2m: temperatureC,
+      relative_humidity_2m: 80,
+      precipitation: 0,
+      rain: 0,
+      wind_speed_10m: windKmh,
+      wind_gusts_10m: gustKmh,
+      weather_code: 3
+    },
+    minutely15: [0, 15, 30, 45, 60, 75, 90, 105, 120].map((minutes) => ({
+      timeMs: now.getTime() + minutes * 60_000,
+      precipitation: precipitationMm / 2,
+      rain: precipitationMm / 2,
+      temperature_2m: temperatureC,
+      wind_speed_10m: windKmh,
+      wind_gusts_10m: gustKmh
+    })),
+    hourly: [180, 240, 480, 1440, 2880].map((minutes) => ({
+      timeMs: now.getTime() + minutes * 60_000,
+      precipitation: precipitationMm,
+      rain: precipitationMm,
+      precipitation_probability: precipitationMm > 0 ? 60 : 0,
+      temperature_2m: temperatureC,
+      wind_speed_10m: windKmh,
+      wind_gusts_10m: gustKmh
+    }))
+  };
+}
+
+function buildMetNorwayForecast(now, { precipitationMm, temperatureC, windKmh, gustKmh }) {
+  return {
+    ok: true,
+    fetchedAt: now.toISOString(),
+    timeseries: [0, 60, 120, 240, 480, 1440, 2880].map((minutes) => ({
+      time: new Date(now.getTime() + minutes * 60_000).toISOString(),
+      timeMs: now.getTime() + minutes * 60_000,
+      instant: {
+        air_temperature: temperatureC,
+        wind_speed_kmh: windKmh,
+        wind_gusts_kmh: gustKmh
+      },
+      next1h: {
+        precipitation_amount: precipitationMm / 2
+      }
+    }))
+  };
+}

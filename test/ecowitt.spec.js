@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/worker.js";
-import { fetchEcowittObservation, normalizeEcowittPayload } from "../src/sources/ecowitt.js";
+import {
+  fetchEcowittDiagnostics,
+  fetchEcowittObservation,
+  normalizeEcowittHistoryPayload,
+  normalizeEcowittPayload
+} from "../src/sources/ecowitt.js";
 
 const NOW = "2026-05-15T16:00:00.000Z";
 const NOW_SECONDS = Math.floor(Date.parse(NOW) / 1000);
@@ -255,6 +260,124 @@ describe("Ecowitt source", () => {
     expect(observation.diagnostics.device.imei).toBe("***3071");
   });
 
+  it("normalizes Ecowitt history into graph-ready metric series", () => {
+    const history = normalizeEcowittHistoryPayload(historyPayload(), {
+      fetchedAt: NOW,
+      windowKey: "last24h",
+      windowLabel: "24h",
+      cycleType: "5min",
+      startAt: "2026-05-14T16:00:00.000Z",
+      endAt: NOW
+    });
+
+    expect(history).toMatchObject({
+      ok: true,
+      key: "last24h",
+      windowLabel: "24h",
+      cycleType: "5min",
+      pointCount: 2,
+      points: [
+        {
+          time: "2026-05-15T15:50:00.000Z",
+          temperatureC: 12,
+          humidityPct: 70,
+          rainRateMmPerHour: 0.2,
+          rainMm: 0.1,
+          windKmh: 9.3,
+          gustKmh: 18.5,
+          windDirectionDeg: 240,
+          soilMoisture: [{ channel: 1, moisturePct: 43 }],
+          leafWetness: [{ channel: 1, wetnessPct: 52 }]
+        },
+        {
+          time: NOW,
+          temperatureC: 12.5,
+          humidityPct: 71,
+          rainRateMmPerHour: null,
+          rainMm: 0,
+          windKmh: 11.1,
+          gustKmh: 20.4,
+          windDirectionDeg: 250,
+          soilMoisture: [{ channel: 1, moisturePct: 44 }],
+          leafWetness: [{ channel: 1, wetnessPct: 53 }]
+        }
+      ]
+    });
+    expect(history.series.temperatureC).toEqual([
+      { time: "2026-05-15T15:50:00.000Z", value: 12 },
+      { time: NOW, value: 12.5 }
+    ]);
+    expect(history.series.soilMoisture.ch1).toEqual([
+      { time: "2026-05-15T15:50:00.000Z", value: 43 },
+      { time: NOW, value: 44 }
+    ]);
+    expect(JSON.stringify(history)).not.toContain("application_key");
+    expect(JSON.stringify(history)).not.toContain("api_key");
+  });
+
+  it("fetches real-time plus 24h and 7d Ecowitt diagnostics without exposing secrets", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = new URL(input);
+
+      if (url.pathname.endsWith("/device/real_time")) {
+        return Promise.resolve(jsonResponse(metricPayload()));
+      }
+
+      return Promise.resolve(jsonResponse(historyPayload()));
+    });
+
+    const diagnostics = await fetchEcowittDiagnostics({
+      env: {
+        ECOWITT_APPLICATION_KEY: "app-secret",
+        ECOWITT_API_KEY: "api-secret",
+        ECOWITT_DEVICE_MAC: "AA:BB:CC:DD:EE:FF"
+      }
+    });
+    const urls = fetchMock.mock.calls.map(([input]) => new URL(input));
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(urls[0].pathname).toBe("/api/v3/device/real_time");
+    expect(urls[1].pathname).toBe("/api/v3/device/history");
+    expect(urls[1].searchParams.get("cycle_type")).toBe("5min");
+    expect(urls[2].searchParams.get("cycle_type")).toBe("30min");
+    expect(urls[1].searchParams.get("temp_unitid")).toBe("1");
+    expect(urls[1].searchParams.get("wind_speed_unitid")).toBe("7");
+    expect(urls[1].searchParams.get("rainfall_unitid")).toBe("12");
+    expect(diagnostics.history.windows.last24h.pointCount).toBe(2);
+    expect(diagnostics.history.windows.last7d.pointCount).toBe(2);
+    expect(JSON.stringify(diagnostics)).not.toContain("app-secret");
+    expect(JSON.stringify(diagnostics)).not.toContain("api-secret");
+    expect(JSON.stringify(diagnostics)).not.toContain("AA:BB:CC:DD:EE:FF");
+    expect(JSON.stringify(diagnostics)).not.toContain("application_key");
+  });
+
+  it("exposes the enriched Ecowitt debug endpoint with sanitized history", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = new URL(input);
+      return Promise.resolve(jsonResponse(url.pathname.endsWith("/device/real_time") ? metricPayload() : historyPayload()));
+    });
+
+    const response = await worker.fetch(new Request("https://example.com/api/debug/ecowitt"), {
+      WEATHER_KV: new MemoryKV(),
+      ECOWITT_APPLICATION_KEY: "app-secret",
+      ECOWITT_API_KEY: "api-secret",
+      ECOWITT_DEVICE_MAC: "AA:BB:CC:DD:EE:FF"
+    }, {
+      waitUntil() {}
+    });
+    const body = await response.json();
+    const serialized = JSON.stringify(body);
+
+    expect(response.ok).toBe(true);
+    expect(body.current.state).toBe("fresh");
+    expect(body.history.windows.last24h.series.temperatureC.length).toBe(2);
+    expect(body.history.windows.last7d.series.rainMm.length).toBe(2);
+    expect(serialized).not.toContain("app-secret");
+    expect(serialized).not.toContain("api-secret");
+    expect(serialized).not.toContain("AA:BB:CC:DD:EE:FF");
+    expect(serialized).not.toContain("application_key");
+  });
+
   it("keeps /api/status functional when Ecowitt and other sources fail", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
     const response = await worker.fetch(new Request("https://example.com/api/refresh"), {
@@ -354,6 +477,62 @@ function imperialPayload() {
   };
 }
 
+function historyPayload() {
+  const previous = String(NOW_SECONDS - 10 * 60);
+
+  return {
+    code: 0,
+    data: {
+      outdoor: {
+        temperature: historyList({
+          [previous]: "12.0",
+          [String(NOW_SECONDS)]: "12.5"
+        }, "C"),
+        humidity: historySensor([
+          { time: previous, value: "70" },
+          { time: String(NOW_SECONDS), value: "71" }
+        ], "%")
+      },
+      rainfall: {
+        rain_rate: historySensor([
+          { time: previous, value: "0.2" },
+          { time: String(NOW_SECONDS), value: "" }
+        ], "mm/h"),
+        hourly: historySensor({
+          [previous]: "0.1",
+          [String(NOW_SECONDS)]: "0"
+        }, "mm")
+      },
+      wind: {
+        wind_speed: historySensor([
+          { time: previous, value: "5" },
+          { time: String(NOW_SECONDS), value: "6" }
+        ], "knot"),
+        wind_gust: historySensor([
+          { time: previous, value: "10" },
+          { time: String(NOW_SECONDS), value: "11" }
+        ], "knot"),
+        wind_direction: historySensor([
+          { time: previous, value: "240" },
+          { time: String(NOW_SECONDS), value: "250" }
+        ], "Âº")
+      },
+      soil_ch1: {
+        soilmoisture: historySensor([
+          { time: previous, value: "43" },
+          { time: String(NOW_SECONDS), value: "44" }
+        ], "%")
+      },
+      leaf_ch1: {
+        leaf_wetness: historySensor([
+          { time: previous, value: "52" },
+          { time: String(NOW_SECONDS), value: "53" }
+        ], "%")
+      }
+    }
+  };
+}
+
 function sensor(value, unit, time = String(NOW_SECONDS)) {
   const sensorValue = { value, unit };
 
@@ -362,6 +541,14 @@ function sensor(value, unit, time = String(NOW_SECONDS)) {
   }
 
   return sensorValue;
+}
+
+function historySensor(value, unit) {
+  return { value, unit };
+}
+
+function historyList(list, unit) {
+  return { list, unit };
 }
 
 function jsonResponse(payload) {

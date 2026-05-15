@@ -5,6 +5,7 @@ import {
   DEFAULT_GARDEN_ALERT_SETTINGS,
   buildGeneratedGardenAlerts,
   buildGardenStatus,
+  createDefaultGardenState,
   normalizeGardenState
 } from "../src/garden.js";
 
@@ -190,5 +191,167 @@ describe("garden facade", () => {
         ]
       ]
     });
+  });
+
+  it("keeps the default local Ecowitt station ready for Garden map placement", () => {
+    const gardenState = createDefaultGardenState(NOW);
+    const station = gardenState.entities.find((entity) => entity.id === "station-locale");
+
+    expect(station).toMatchObject({
+      id: "station-locale",
+      type: "weather_station",
+      name: "Station météo locale",
+      tags: ["ecowitt", "meteo"],
+      position: null
+    });
+    expect(station.sensors).toEqual([
+      {
+        id: "ecowitt-temperature-24h",
+        source: "ecowitt",
+        externalId: "station-locale",
+        label: "Température locale 24 h",
+        metric: "temperatureC",
+        enabled: true,
+        channel: "",
+        path: "",
+        seriesKey: "temperatureC.24h"
+      },
+      {
+        id: "ecowitt-humidity-24h",
+        source: "ecowitt",
+        externalId: "station-locale",
+        label: "Humidité locale 24 h",
+        metric: "humidityPct",
+        enabled: true,
+        channel: "",
+        path: "",
+        seriesKey: "humidityPct.24h"
+      },
+      {
+        id: "ecowitt-rain-24h",
+        source: "ecowitt",
+        externalId: "station-locale",
+        label: "Pluie locale 24 h",
+        metric: "dailyRainMm",
+        enabled: true,
+        channel: "",
+        path: "",
+        seriesKey: "rain.24h"
+      }
+    ]);
+  });
+
+  it("normalizes lightweight Ecowitt sensor references without storing measurements", () => {
+    const gardenState = normalizeGardenState({
+      entities: [
+        {
+          id: "potager",
+          type: "vegetable_bed",
+          sensors: [
+            {
+              source: "ecowitt",
+              externalId: "soil-zone-1",
+              label: "  Humidité sol potager  ",
+              metric: "soilMoisturePct",
+              enabled: "yes",
+              channel: "WH51-1",
+              path: "soil_ch1.soilmoisture",
+              seriesKey: "soilMoisturePct.7d",
+              value: 42,
+              history: [{ value: 40 }]
+            },
+            {
+              id: "leaf-wetness-vigne",
+              source: "ecowitt",
+              externalId: "leaf-zone-1",
+              metric: "leafWetnessPct",
+              enabled: false
+            }
+          ]
+        }
+      ]
+    }, NOW);
+
+    expect(gardenState.entities[0].sensors).toEqual([
+      {
+        id: "ecowitt-soil-zone-1-wh51-1-soilmoisturepct-soilmoisturepct-7d",
+        source: "ecowitt",
+        externalId: "soil-zone-1",
+        label: "Humidité sol potager",
+        metric: "soilMoisturePct",
+        enabled: false,
+        channel: "WH51-1",
+        path: "soil_ch1.soilmoisture",
+        seriesKey: "soilMoisturePct.7d"
+      },
+      {
+        id: "leaf-wetness-vigne",
+        source: "ecowitt",
+        externalId: "leaf-zone-1",
+        label: "",
+        metric: "leafWetnessPct",
+        enabled: false,
+        channel: "",
+        path: "",
+        seriesKey: ""
+      }
+    ]);
+    expect(gardenState.entities[0].sensors[0]).not.toHaveProperty("value");
+    expect(gardenState.entities[0].sensors[0]).not.toHaveProperty("history");
+  });
+
+  it("keeps missing sensors compatible and drops invalid sensor references", () => {
+    const gardenState = normalizeGardenState({
+      entities: [
+        {
+          id: "vigne",
+          type: "vine"
+        },
+        {
+          id: "station-locale",
+          type: "weather_station",
+          sensors: [
+            null,
+            {
+              source: "open-meteo",
+              externalId: "forecast",
+              metric: "temperatureC"
+            },
+            {
+              source: "ecowitt",
+              externalId: "AA:BB:CC:DD:EE:FF",
+              metric: "temperatureC"
+            },
+            {
+              source: "ecowitt",
+              externalId: "station-locale",
+              metric: ""
+            },
+            {
+              id: "station-gust",
+              source: "ecowitt",
+              externalId: "station-locale",
+              metric: "gustKmh",
+              enabled: true
+            }
+          ]
+        }
+      ]
+    }, NOW);
+
+    expect(gardenState.entities[0].sensors).toEqual([]);
+    expect(gardenState.entities[1].sensors).toEqual([
+      {
+        id: "station-gust",
+        source: "ecowitt",
+        externalId: "station-locale",
+        label: "",
+        metric: "gustKmh",
+        enabled: true,
+        channel: "",
+        path: "",
+        seriesKey: ""
+      }
+    ]);
   });
 });

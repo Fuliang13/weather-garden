@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Weather Garden</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="/style.css?v=20260515-garden-ui">
+  <link rel="stylesheet" href="/style.css?v=20260515-wgf-ui">
 </head>
 <body>
   <main class="app-shell">
@@ -64,6 +64,18 @@
           <h2>Horizons pluie</h2>
           <div id="horizons" class="horizons"></div>
         </article>
+      </section>
+
+      <section id="forecastComparisonCard" class="card forecast-comparison-card dashboard-block dashboard-block-forecast-comparison">
+        <div class="section-header">
+          <div>
+            <h2>Comparatif des prévisions</h2>
+            <p id="forecastComparisonGeneratedAt" class="muted">Chargement du comparatif…</p>
+            <p class="forecast-comparison-legend">AROME anticipe la pluie locale · MET Norway confirme la tendance · WGF synthétise les signaux Weather Garden.</p>
+          </div>
+          <span class="forecast-comparison-badge">WGF</span>
+        </div>
+        <div id="forecastComparisonBody" class="forecast-comparison"></div>
       </section>
 
       <section id="gardenCard" class="card garden-card dashboard-block dashboard-block-garden" hidden>
@@ -203,6 +215,13 @@
         <h2>Réglages</h2>
         <form id="settingsForm" class="settings-form">
           <label>
+            Système d’unités affichées
+            <select name="unitSystem">
+              <option value="metric">Métrique (°C, km/h, mm)</option>
+              <option value="imperial">Non métrique (°F, mph, in)</option>
+            </select>
+          </label>
+          <label>
             Seuil pluie sur l'horizon choisi, en mm
             <input name="rainThresholdMm" type="number" min="0.1" step="0.1">
           </label>
@@ -285,6 +304,6 @@
   </main>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/app.js?v=20260515-garden-ui" type="module"></script>
+  <script src="/app.js?v=20260515-wgf-ui" type="module"></script>
 </body>
 </html>
