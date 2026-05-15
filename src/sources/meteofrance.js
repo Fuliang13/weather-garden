@@ -825,6 +825,7 @@ function parseMeteoFranceHdf5Structure(bytes) {
     context.lengthSize = superblock.lengthSize;
     context.baseAddress = superblock.baseAddress;
     const rootGroup = parseHdf5Group(context, "/", "", superblock.rootSymbolTableEntry, new Set());
+    recoverMeteoFranceOdimMetadataAttributes(context);
 
     return {
       parsingOk: context.errors.length === 0 && !!rootGroup,
@@ -833,6 +834,8 @@ function parseMeteoFranceHdf5Structure(bytes) {
       groups: context.groups,
       datasets: context.datasets,
       attributes: context.attributes,
+      recoveredOdimAttributeCount: context.recoveredOdimAttributeCount,
+      recoveredOdimAttributePaths: Array.from(context.recoveredOdimAttributePaths),
       errors: context.errors.slice(0, 20)
     };
   } catch (error) {
@@ -858,7 +861,9 @@ function createHdf5Context(bytes) {
     groups: [],
     datasets: [],
     attributes: [],
-    errors: []
+    errors: [],
+    recoveredOdimAttributeCount: 0,
+    recoveredOdimAttributePaths: new Set()
   };
 }
 
@@ -909,6 +914,240 @@ function parseHdf5Superblock(context) {
   context.baseAddress = baseAddress || 0;
   context.superblock = superblock;
   return superblock;
+}
+
+
+const METEOFRANCE_ODIM_WHERE_ATTRIBUTE_NAMES = [
+  "projdef",
+  "projection",
+  "proj4",
+  "xsize",
+  "ysize",
+  "xscale",
+  "yscale",
+  "LL_lon",
+  "LL_lat",
+  "UL_lon",
+  "UL_lat",
+  "UR_lon",
+  "UR_lat",
+  "LR_lon",
+  "LR_lat"
+];
+const METEOFRANCE_ODIM_DATA_ATTRIBUTE_NAMES = ["quantity", "gain", "offset", "nodata", "undetect"];
+const METEOFRANCE_ODIM_PRODUCT_ATTRIBUTE_NAMES = ["product", "startdate", "starttime", "enddate", "endtime"];
+const METEOFRANCE_ODIM_ROOT_ATTRIBUTE_NAMES = ["object", "version", "date", "time", "source"];
+const METEOFRANCE_ODIM_RECOVERY_ATTRIBUTE_NAMES = [
+  ...METEOFRANCE_ODIM_WHERE_ATTRIBUTE_NAMES,
+  ...METEOFRANCE_ODIM_DATA_ATTRIBUTE_NAMES,
+  ...METEOFRANCE_ODIM_PRODUCT_ATTRIBUTE_NAMES,
+  ...METEOFRANCE_ODIM_ROOT_ATTRIBUTE_NAMES
+];
+
+function recoverMeteoFranceOdimMetadataAttributes(context) {
+  const candidates = recoverHdf5AttributeCandidates(context, METEOFRANCE_ODIM_RECOVERY_ATTRIBUTE_NAMES);
+
+  if (!candidates.length) {
+    return;
+  }
+
+  attachRecoveredHdf5AttributesToGroup(
+    context,
+    "/where",
+    candidates.filter((candidate) => hdf5AttributeNameListIncludes(METEOFRANCE_ODIM_WHERE_ATTRIBUTE_NAMES, candidate.name))
+  );
+
+  const dataClusters = clusterRecoveredHdf5AttributeCandidates(
+    candidates.filter((candidate) => hdf5AttributeNameListIncludes(METEOFRANCE_ODIM_DATA_ATTRIBUTE_NAMES, candidate.name))
+  );
+  const radarCluster = dataClusters.find((cluster) => getHdf5AttributeValue(cluster, ["quantity"]) === "ACRR")
+    || dataClusters.find((cluster) => [65535, 65534].some((value) => cluster.some((attribute) => attribute.value === value)))
+    || dataClusters[0]
+    || [];
+  const qualityCluster = dataClusters.find((cluster) => getHdf5AttributeValue(cluster, ["quantity"]) === "QIND") || [];
+
+  attachRecoveredHdf5AttributesToFirstExistingGroup(context, ["/dataset1/data1/what", "/what"], radarCluster);
+  attachRecoveredHdf5AttributesToGroup(context, "/dataset1/data1/quality1/what", qualityCluster);
+  attachRecoveredHdf5AttributesToGroup(
+    context,
+    "/dataset1/what",
+    candidates.filter((candidate) => hdf5AttributeNameListIncludes(METEOFRANCE_ODIM_PRODUCT_ATTRIBUTE_NAMES, candidate.name))
+  );
+  attachRecoveredHdf5AttributesToGroup(
+    context,
+    "/what",
+    candidates.filter((candidate) => hdf5AttributeNameListIncludes(METEOFRANCE_ODIM_ROOT_ATTRIBUTE_NAMES, candidate.name))
+  );
+}
+
+function hdf5AttributeNameListIncludes(names, value) {
+  const normalizedValue = normalizeHdf5AttributeName(value);
+  return names.some((name) => normalizeHdf5AttributeName(name) === normalizedValue);
+}
+
+function recoverHdf5AttributeCandidates(context, names) {
+  const candidates = [];
+  const seen = new Set();
+
+  for (const name of names) {
+    const nameBytes = encodeHdf5Ascii(name);
+    let offset = 0;
+
+    while (offset < context.bytes.byteLength) {
+      const nameOffset = findHdf5Bytes(context.bytes, nameBytes, offset);
+
+      if (nameOffset < 0) {
+        break;
+      }
+
+      const attribute = parseRecoveredHdf5AttributeAtNameOffset(context, nameOffset, name);
+
+      if (attribute) {
+        const key = `${attribute.name}:${attribute.offset}`;
+
+        if (!seen.has(key)) {
+          seen.add(key);
+          candidates.push(attribute);
+        }
+      }
+
+      offset = nameOffset + nameBytes.length;
+    }
+  }
+
+  return candidates.sort((a, b) => a.offset - b.offset);
+}
+
+function parseRecoveredHdf5AttributeAtNameOffset(context, nameOffset, expectedName) {
+  const dataStart = nameOffset - 8;
+
+  if (dataStart < 0 || dataStart + 16 > context.bytes.byteLength) {
+    return null;
+  }
+
+  try {
+    const version = context.bytes[dataStart];
+
+    if (version !== 1) {
+      return null;
+    }
+
+    const nameSize = readUInt16(context, dataStart + 2);
+    const datatypeSize = readUInt16(context, dataStart + 4);
+    const dataspaceSize = readUInt16(context, dataStart + 6);
+
+    if (nameSize < expectedName.length || nameSize > 256 || datatypeSize < 8 || datatypeSize > 256 || dataspaceSize < 4 || dataspaceSize > 256) {
+      return null;
+    }
+
+    const decodedName = decodeHdf5Ascii(context.bytes.subarray(nameOffset, nameOffset + nameSize)).replace(/\0+$/, "");
+
+    if (normalizeHdf5AttributeName(decodedName) !== normalizeHdf5AttributeName(expectedName)) {
+      return null;
+    }
+
+    const dataEnd = Math.min(context.bytes.byteLength, dataStart + 2048);
+    const attribute = parseHdf5AttributeMessage(context, context.bytes.subarray(dataStart, dataEnd));
+
+    if (normalizeHdf5AttributeName(attribute.name) !== normalizeHdf5AttributeName(expectedName)) {
+      return null;
+    }
+
+    return {
+      ...attribute,
+      recovered: true,
+      offset: dataStart
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function clusterRecoveredHdf5AttributeCandidates(candidates) {
+  const clusters = [];
+
+  for (const candidate of candidates) {
+    const previousCluster = clusters[clusters.length - 1];
+
+    if (!previousCluster || candidate.offset - previousCluster[previousCluster.length - 1].offset > 768) {
+      clusters.push([candidate]);
+      continue;
+    }
+
+    previousCluster.push(candidate);
+  }
+
+  return clusters;
+}
+
+function attachRecoveredHdf5AttributesToFirstExistingGroup(context, paths, attributes) {
+  const path = paths.find((candidate) => context.groups.some((group) => group.path === candidate));
+
+  if (!path) {
+    return 0;
+  }
+
+  return attachRecoveredHdf5AttributesToGroup(context, path, attributes);
+}
+
+function attachRecoveredHdf5AttributesToGroup(context, path, attributes) {
+  const group = context.groups.find((candidate) => candidate.path === path);
+
+  if (!group || !attributes?.length) {
+    return 0;
+  }
+
+  let added = 0;
+
+  for (const attribute of attributes) {
+    if (group.attributes.some((existing) => normalizeHdf5AttributeName(existing.name) === normalizeHdf5AttributeName(attribute.name))) {
+      continue;
+    }
+
+    const cleanAttribute = {
+      name: attribute.name,
+      version: attribute.version,
+      dataType: attribute.dataType,
+      dataspace: attribute.dataspace,
+      value: attribute.value,
+      recovered: true
+    };
+
+    group.attributes.push(cleanAttribute);
+    context.attributes.push({ ...cleanAttribute, ownerPath: path });
+    context.recoveredOdimAttributeCount++;
+    context.recoveredOdimAttributePaths.add(path);
+    added++;
+  }
+
+  return added;
+}
+
+function findHdf5Bytes(bytes, pattern, start = 0) {
+  if (!pattern.length) {
+    return -1;
+  }
+
+  for (let offset = start; offset <= bytes.byteLength - pattern.length; offset++) {
+    let found = true;
+
+    for (let index = 0; index < pattern.length; index++) {
+      if (bytes[offset + index] !== pattern[index]) {
+        found = false;
+        break;
+      }
+    }
+
+    if (found) {
+      return offset;
+    }
+  }
+
+  return -1;
+}
+
+function encodeHdf5Ascii(value) {
+  return new Uint8Array([...String(value)].map((character) => character.charCodeAt(0) & 0xff));
 }
 
 function parseHdf5Group(context, path, name, symbolTableEntry, visited) {
@@ -1550,8 +1789,9 @@ function hasExpectedMeteoFranceRadarDimensions(dataset) {
 }
 
 function extractMeteoFranceProjection(structure) {
-  const attributes = collectHdf5Attributes(structure);
-  const projectionAttribute = attributes.find((attribute) => /projection|proj4|proj_def|projdef|grid_mapping|lambert|stereographic/i.test(attribute.name));
+  const odimWhereAttributes = collectMeteoFranceOdimGroupAttributes(structure, "/where");
+  const projectionAttribute = findHdf5AttributeValueSource(odimWhereAttributes, ["projdef", "projection", "proj4", "proj_def", "grid_mapping"])
+    || findHdf5AttributeValueSource(collectHdf5Attributes(structure), ["projection", "proj4", "proj_def", "projdef", "grid_mapping", "lambert", "stereographic"]);
 
   if (!projectionAttribute) {
     return null;
@@ -1564,8 +1804,12 @@ function extractMeteoFranceProjection(structure) {
 }
 
 function extractMeteoFranceBounds(structure) {
-  const attributes = collectHdf5Attributes(structure);
-  const values = Object.fromEntries(attributes.map((attribute) => [normalizeHdf5AttributeName(attribute.name), attribute.value]));
+  return extractMeteoFranceBoundsFromAttributes(collectMeteoFranceOdimGroupAttributes(structure, "/where"))
+    || extractMeteoFranceBoundsFromAttributes(collectHdf5Attributes(structure));
+}
+
+function extractMeteoFranceBoundsFromAttributes(attributes) {
+  const values = Object.fromEntries((attributes || []).map((attribute) => [normalizeHdf5AttributeName(attribute.name), attribute.value]));
   const south = firstFiniteHdf5Attribute(values, ["geospatial_lat_min", "lat_min", "latitude_min", "south", "y_min"]);
   const north = firstFiniteHdf5Attribute(values, ["geospatial_lat_max", "lat_max", "latitude_max", "north", "y_max"]);
   const west = firstFiniteHdf5Attribute(values, ["geospatial_lon_min", "lon_min", "longitude_min", "west", "x_min"]);
@@ -1588,6 +1832,17 @@ function extractMeteoFranceBounds(structure) {
   ];
 }
 
+function findHdf5AttributeValueSource(attributes, names) {
+  const normalizedNames = names.map(normalizeHdf5AttributeName);
+  return (attributes || []).find((attribute) => normalizedNames.some((name) => normalizeHdf5AttributeName(attribute.name).includes(name))) || null;
+}
+
+function collectMeteoFranceOdimGroupAttributes(structure, path) {
+  return (structure?.groups || [])
+    .filter((group) => group.path === path)
+    .flatMap((group) => group.attributes.map((attribute) => ({ ...attribute, ownerPath: group.path })));
+}
+
 function collectHdf5Attributes(structure) {
   return [
     ...(structure?.attributes || []),
@@ -1602,12 +1857,17 @@ function collectMeteoFranceRadarDatasetAttributes(structure, radarDataset) {
   }
 
   const parentPath = radarDataset.path.replace(/\/[^/]+$/, "");
-  const metadataGroupPath = `${parentPath}/what`;
-  const metadataGroup = (structure?.groups || []).find((group) => group.path === metadataGroupPath);
+  const datasetPath = parentPath.replace(/\/data\d+$/, "");
+  const metadataGroupPaths = [
+    `${parentPath}/what`,
+    `${datasetPath}/what`,
+    "/what"
+  ];
+  const metadataGroups = (structure?.groups || []).filter((group) => metadataGroupPaths.includes(group.path));
 
   return [
     ...(radarDataset.attributes || []),
-    ...(metadataGroup?.attributes || [])
+    ...metadataGroups.flatMap((group) => group.attributes.map((attribute) => ({ ...attribute, ownerPath: group.path })))
   ];
 }
 

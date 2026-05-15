@@ -89,7 +89,7 @@ export function buildWeatherStatus({
 
   const alertHorizon = horizonResults.find((item) => item.minutes === safeSettings.rainAlertMinutes) || horizonResults[0];
   const alertLevel = getAlertLevel(alertHorizon.score);
-  const current = buildCurrentConditions(openMeteo, metNorway);
+  const current = buildCurrentConditions(openMeteo, metNorway, ecowittObservation);
   const rainSignal = buildRainSignal({
     current,
     openMeteo,
@@ -178,22 +178,24 @@ function buildHorizonResult({ minutes, settings, openMeteo, metNorway, meteoFran
   };
 }
 
-function buildCurrentConditions(openMeteo, metNorway) {
+function buildCurrentConditions(openMeteo, metNorway, ecowittObservation) {
   const current = openMeteo?.current || {};
   const metCurrent = metNorway?.timeseries?.[0]?.instant || {};
+  const stationCurrent = ecowittObservation?.ok && !ecowittObservation.stale ? ecowittObservation.current || {} : {};
   const sourceLabels = [
+    ecowittObservation?.ok && !ecowittObservation.stale ? ecowittObservation.label || "Ecowitt" : null,
     openMeteo?.ok ? "Open-Meteo AROME" : null,
     metNorway?.ok ? "MET Norway" : null
   ].filter(Boolean);
 
   return {
-    temperatureC: pickNumber(current.temperature_2m, metCurrent.air_temperature),
-    humidityPct: pickNumber(current.relative_humidity_2m, metCurrent.relative_humidity),
-    windKmh: pickNumber(current.wind_speed_10m, metCurrent.wind_speed_kmh),
-    gustKmh: pickNumber(current.wind_gusts_10m, metCurrent.wind_gusts_kmh),
+    temperatureC: pickNumber(stationCurrent.temperatureC, current.temperature_2m, metCurrent.air_temperature),
+    humidityPct: pickNumber(stationCurrent.humidityPct, current.relative_humidity_2m, metCurrent.relative_humidity),
+    windKmh: pickNumber(stationCurrent.windKmh, current.wind_speed_10m, metCurrent.wind_speed_kmh),
+    gustKmh: pickNumber(stationCurrent.gustKmh, current.wind_gusts_10m, metCurrent.wind_gusts_kmh),
     precipitationMm: pickNumber(current.precipitation, current.rain, 0),
     weatherCode: current.weather_code ?? null,
-    sourceLabel: sourceLabels.length ? `Prévision immédiate · ${sourceLabels.join(" / ")}` : "Prévision immédiate"
+    sourceLabel: sourceLabels.length ? `Conditions actuelles · ${sourceLabels.join(" / ")}` : "Prévision immédiate"
   };
 }
 
@@ -340,51 +342,108 @@ function shouldSendRainAlert(settings, rainSignal, alertLevel, alertHorizon) {
 
 function buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer, ecowittObservation, errors) {
   return [
-    {
+    buildSourceStatus({
       id: "open-meteo-arome",
       label: "Open-Meteo AROME",
-      ok: !!openMeteo?.ok,
-      status: getSourceFreshness(openMeteo),
-      updatedAt: openMeteo?.fetchedAt || null
-    },
-    {
+      payload: openMeteo,
+      role: "forecast-primary",
+      priority: 10,
+      errors
+    }),
+    buildSourceStatus({
       id: "met-norway",
       label: "MET Norway",
-      ok: !!metNorway?.ok,
-      status: getSourceFreshness(metNorway),
-      updatedAt: metNorway?.fetchedAt || null
-    },
-    {
+      payload: metNorway,
+      role: "forecast-confirmation",
+      priority: 8,
+      errors
+    }),
+    buildSourceStatus({
       id: "meteofrance-radar",
       label: "Météo-France radar",
-      ok: !!meteoFranceRadar?.ok,
-      enabled: !!meteoFranceRadar?.enabled,
-      status: getSourceFreshness(meteoFranceRadar),
-      updatedAt: meteoFranceRadar?.fetchedAt || null,
-      message: meteoFranceRadar?.message || null
-    },
-    {
+      payload: meteoFranceRadar,
+      enabled: meteoFranceRadar ? !!meteoFranceRadar.enabled : false,
+      role: "radar-primary",
+      priority: 20,
+      errors,
+      extra: {
+        message: meteoFranceRadar?.message || null
+      }
+    }),
+    buildSourceStatus({
       id: "rainviewer",
       label: "RainViewer",
-      ok: !!rainViewer?.ok,
-      status: getSourceFreshness(rainViewer),
-      updatedAt: rainViewer?.fetchedAt || null,
-      imageUrl: rainViewer?.imageUrl || null
-    },
-    {
+      payload: rainViewer,
+      enabled: rainViewer ? rainViewer.enabled !== false : false,
+      role: "radar-visual-fallback",
+      priority: 3,
+      errors,
+      extra: {
+        imageUrl: rainViewer?.imageUrl || null
+      }
+    }),
+    buildSourceStatus({
       id: "ecowitt",
       label: ecowittObservation?.label || "Ecowitt",
-      ok: !!ecowittObservation?.ok,
-      enabled: ecowittObservation ? !!ecowittObservation.enabled : undefined,
-      status: getSourceFreshness(ecowittObservation),
-      stale: ecowittObservation?.stale ?? undefined,
-      updatedAt: ecowittObservation?.updatedAt || ecowittObservation?.fetchedAt || null,
-      message: ecowittObservation?.message || null
-    }
-  ].map((source) => ({
-    ...source,
-    errors: errors.filter((error) => error.source === source.id).map((error) => error.message)
-  }));
+      payload: ecowittObservation,
+      enabled: ecowittObservation ? !!ecowittObservation.enabled : false,
+      role: "observation-local",
+      priority: 30,
+      errors,
+      extra: {
+        message: ecowittObservation?.message || null
+      }
+    })
+  ];
+}
+
+function buildSourceStatus({ id, label, payload, enabled = payload ? true : false, role, priority, errors, extra = {} }) {
+  const state = getSourceFreshness(payload);
+  const stale = payload?.stale ?? state === "stale";
+  const updatedAt = payload?.updatedAt || payload?.validityTime || payload?.fetchedAt || null;
+  const fetchedAt = payload?.fetchedAt || null;
+  const freshnessMinutes = Number.isFinite(payload?.freshnessMinutes)
+    ? payload.freshnessMinutes
+    : Number.isFinite(payload?.ageMinutes)
+      ? payload.ageMinutes
+      : minutesSince(updatedAt);
+
+  return {
+    id,
+    label,
+    enabled,
+    ok: !!payload?.ok,
+    stale,
+    state,
+    status: state,
+    source: payload?.source || id,
+    updatedAt,
+    fetchedAt,
+    freshnessMinutes,
+    role,
+    priority,
+    message: payload?.message || null,
+    errors: [
+      ...(payload?.errors || []),
+      ...errors.filter((error) => error.source === id).map((error) => error.message)
+    ],
+    publicSafe: true,
+    ...extra
+  };
+}
+
+function minutesSince(isoDate) {
+  if (!isoDate) {
+    return null;
+  }
+
+  const time = Date.parse(isoDate);
+
+  if (!Number.isFinite(time)) {
+    return null;
+  }
+
+  return Math.max(0, Math.round((Date.now() - time) / 60_000));
 }
 
 function getSourceFreshness(source) {

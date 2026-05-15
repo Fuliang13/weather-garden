@@ -8,7 +8,7 @@ Mini app météo-jardin personnelle pour Louvigné-du-Désert.
 - MET Norway Locationforecast : confirmation indépendante.
 - Météo-France radar : catalogue DPRadar via API Key JWT ou OAuth2.
 - RainViewer : fallback visuel radar, activé par défaut.
-- Ecowitt : structure prête pour station locale via `ECOWITT_API_URL` après validation du format réellement utilisé.
+- Ecowitt : station locale via l’API Cloud officielle `/api/v3/device/real_time`, avec normalisation métrique et contrôle de fraîcheur.
 - ntfy : notifications gratuites, optionnelles.
 
 ## Installation
@@ -119,11 +119,26 @@ Secrets obligatoires :
 ```bash
 npx wrangler secret put ECOWITT_APPLICATION_KEY
 npx wrangler secret put ECOWITT_API_KEY
+```
+
+Il faut aussi configurer au moins un identifiant de dispositif :
+
+```bash
 npx wrangler secret put ECOWITT_DEVICE_MAC
+```
+
+Fallbacks compatibles :
+
+```bash
+npx wrangler secret put ECOWITT_MAC
+npx wrangler secret put ECOWITT_DEVICE_IMEI
 ```
 
 Optionnel :
 
 ```bash
 ECOWITT_STATION_LABEL="Station locale"
+ECOWITT_STALE_MINUTES="20"
 ```
+
+Le Worker force les unités métriques dans la requête, puis relit quand même l’unité retournée par chaque mesure avant normalisation. Les clés, MAC complet, IMEI complet et URLs avec query string ne doivent jamais apparaître dans les réponses publiques ou debug.
