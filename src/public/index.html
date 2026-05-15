@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Weather Garden</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/style.css?v=20260515-garden-ui">
 </head>
 <body>
   <main class="app-shell">
@@ -101,19 +101,46 @@
     </section>
 
     <section data-panel="garden" hidden>
-      <section class="card">
+      <section class="card garden-workspace-card">
         <div class="section-header">
           <div>
-            <h2>Entités jardin</h2>
-            <p class="muted">Plantes, vigne, potager, zones, station ou capteurs suivis par les alertes.</p>
+            <h2>Jardin</h2>
+            <p id="gardenWorkspaceStatus" class="muted">Chargement du jardin...</p>
           </div>
-          <button id="resetGardenButton" type="button" class="secondary">Réinitialiser</button>
+          <div class="garden-actions" aria-label="Actions KML">
+            <button id="importKmlButton" type="button" class="secondary" disabled title="Import KML bientôt disponible">Importer KML</button>
+            <button id="exportKmlButton" type="button" class="secondary" disabled title="Export KML bientôt disponible">Exporter KML</button>
+          </div>
         </div>
-        <ul id="gardenEntitiesList" class="garden-entities-list"></ul>
+        <p id="gardenKmlMessage" class="garden-state-note" role="status">Import et export KML préparés dans l'interface. Activation dès que l'API KML sera intégrée.</p>
+        <div class="garden-workspace">
+          <div class="garden-map-panel">
+            <div id="gardenMap" class="garden-map" role="img" aria-label="Carte Jardin séparée du radar météo"></div>
+            <p id="gardenMapMessage" class="garden-state-note">La carte affiche uniquement les positions et géométries déjà enregistrées.</p>
+          </div>
+          <aside class="garden-side-panel" aria-label="Entites jardin">
+            <div class="garden-side-header">
+              <h3>Entites</h3>
+              <span id="gardenEntitiesCount" class="garden-badge">0</span>
+            </div>
+            <ul id="gardenEntitiesList" class="garden-entities-list"></ul>
+          </aside>
+          <aside class="garden-detail-panel" aria-label="Détail de l'entité sélectionnée">
+            <div id="gardenEntityDetail" class="garden-entity-detail">
+              <p class="muted">Sélectionne une entité dans la liste ou sur la carte.</p>
+            </div>
+          </aside>
+        </div>
       </section>
 
       <section class="card">
-        <h2>Ajouter ou modifier une entité</h2>
+        <div class="section-header">
+          <div>
+            <h2>Ajouter ou modifier une entité</h2>
+            <p id="gardenFormState" class="muted">Aucune modification en cours.</p>
+          </div>
+          <button id="resetGardenButton" type="button" class="secondary danger-button">Réinitialiser le jardin</button>
+        </div>
         <form id="gardenEntityForm" class="settings-form">
           <label>
             Identifiant optionnel
@@ -152,6 +179,10 @@
             <textarea name="notes" rows="3"></textarea>
           </label>
           <button type="submit">Enregistrer l'entité</button>
+          <div class="button-row full-row">
+            <button id="clearGardenFormButton" type="button" class="secondary">Nouveau</button>
+            <button id="deleteGardenEntityButton" type="button" class="secondary danger-button" disabled>Supprimer l'entité sélectionnée</button>
+          </div>
         </form>
         <p id="gardenEntityMessage" class="muted"></p>
       </section>
@@ -254,6 +285,6 @@
   </main>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/app.js" type="module"></script>
+  <script src="/app.js?v=20260515-garden-ui" type="module"></script>
 </body>
 </html>

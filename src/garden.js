@@ -24,6 +24,8 @@ export const GARDEN_ENTITY_TYPES = [
   "other"
 ];
 
+const GARDEN_GEOJSON_GEOMETRY_TYPES = ["Point", "LineString", "Polygon"];
+
 export const DEFAULT_GARDEN_STATE = {
   version: 1,
   entities: [],
@@ -180,13 +182,13 @@ function normalizePosition(position) {
     return null;
   }
 
-  const latitude = toFiniteNumber(position.latitude);
-  const longitude = toFiniteNumber(position.longitude);
+  const latitude = normalizeLatitude(position.latitude);
+  const longitude = normalizeLongitude(position.longitude);
   const normalized = {
     label: normalizeText(position.label),
     latitude,
     longitude,
-    geometry: normalizeObject(position.geometry)
+    geometry: normalizeGeoJsonGeometry(position.geometry)
   };
 
   return Object.values(normalized).some((value) => value !== null && value !== "" && !(isPlainObject(value) && !Object.keys(value).length))
@@ -195,11 +197,23 @@ function normalizePosition(position) {
 }
 
 function normalizeTextList(value) {
+  const seen = new Set();
   if (typeof value === "string") {
-    return value.split(",").map(normalizeText).filter(Boolean);
+    return dedupeTextList(value.split(","));
   }
 
-  return toArray(value).map(normalizeText).filter(Boolean);
+  return dedupeTextList(toArray(value));
+
+  function dedupeTextList(items) {
+    return items.map(normalizeText).filter((item) => {
+      if (!item || seen.has(item)) {
+        return false;
+      }
+
+      seen.add(item);
+      return true;
+    });
+  }
 }
 
 function normalizeText(value) {
@@ -230,6 +244,59 @@ function toArray(value) {
 function toFiniteNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function normalizeLatitude(value) {
+  const number = toFiniteNumber(value);
+  return number !== null && number >= -90 && number <= 90 ? number : null;
+}
+
+function normalizeLongitude(value) {
+  const number = toFiniteNumber(value);
+  return number !== null && number >= -180 && number <= 180 ? number : null;
+}
+
+function normalizeGeoJsonGeometry(geometry) {
+  if (!isPlainObject(geometry) || !GARDEN_GEOJSON_GEOMETRY_TYPES.includes(geometry.type)) {
+    return {};
+  }
+
+  if (geometry.type === "Point") {
+    const coordinates = normalizeCoordinatePair(geometry.coordinates);
+    return coordinates ? { type: geometry.type, coordinates } : {};
+  }
+
+  if (geometry.type === "LineString") {
+    const coordinates = toArray(geometry.coordinates).map(normalizeCoordinatePair).filter(Boolean);
+    return coordinates.length >= 2 ? { type: geometry.type, coordinates } : {};
+  }
+
+  const coordinates = toArray(geometry.coordinates).map(normalizeLinearRing).filter(Boolean);
+  return coordinates.length ? { type: geometry.type, coordinates } : {};
+}
+
+function normalizeLinearRing(value) {
+  const ring = toArray(value).map(normalizeCoordinatePair).filter(Boolean);
+
+  if (ring.length < 4 || !sameCoordinatePair(ring[0], ring[ring.length - 1])) {
+    return null;
+  }
+
+  return ring;
+}
+
+function normalizeCoordinatePair(value) {
+  if (!Array.isArray(value) || value.length < 2) {
+    return null;
+  }
+
+  const longitude = normalizeLongitude(value[0]);
+  const latitude = normalizeLatitude(value[1]);
+  return longitude === null || latitude === null ? null : [longitude, latitude];
+}
+
+function sameCoordinatePair(left, right) {
+  return Array.isArray(left) && Array.isArray(right) && left[0] === right[0] && left[1] === right[1];
 }
 
 function toIsoDate(value) {

@@ -279,6 +279,123 @@ h2 {
   color: var(--garden);
 }
 
+.garden-workspace-card {
+  overflow: hidden;
+}
+
+.garden-actions,
+.garden-side-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.garden-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.garden-actions button:disabled {
+  cursor: not-allowed;
+}
+
+.garden-state-note {
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.garden-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(14rem, 0.7fr) minmax(15rem, 0.75fr);
+  gap: 1rem;
+  margin-top: 1rem;
+  align-items: stretch;
+}
+
+.garden-map-panel,
+.garden-side-panel,
+.garden-detail-panel {
+  min-width: 0;
+}
+
+.garden-map {
+  width: 100%;
+  min-height: 430px;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: #dfe7e2;
+  overflow: hidden;
+}
+
+.garden-side-panel,
+.garden-detail-panel {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--soft) 72%, white);
+  padding: 0.9rem;
+}
+
+.garden-side-header {
+  justify-content: space-between;
+}
+
+.garden-side-header h3,
+.garden-entity-detail h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.garden-entity-select {
+  display: grid;
+  width: 100%;
+  gap: 0.2rem;
+  border: 0;
+  border-radius: 0.75rem;
+  background: transparent;
+  color: var(--text);
+  padding: 0;
+  text-align: left;
+}
+
+.garden-entity-select span {
+  color: var(--muted);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.garden-entity-row[data-selected="true"] {
+  border-color: color-mix(in srgb, var(--garden) 55%, var(--border));
+  background: color-mix(in srgb, var(--soft) 45%, white);
+  outline: 2px solid color-mix(in srgb, var(--garden) 20%, transparent);
+}
+
+.garden-entity-detail {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.garden-entity-detail dl {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0;
+}
+
+.garden-entity-detail div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.garden-entity-detail dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.garden-entity-detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .section-header {
   display: flex;
   align-items: flex-start;
@@ -625,8 +742,20 @@ button.secondary,
     flex-direction: column;
   }
 
+  .garden-actions {
+    justify-content: flex-start;
+  }
+
+  .garden-workspace {
+    grid-template-columns: 1fr;
+  }
+
   .radar-map {
     min-height: 420px;
+  }
+
+  .garden-map {
+    min-height: 360px;
   }
 
     .metrics-wide {

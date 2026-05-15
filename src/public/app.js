@@ -3,6 +3,13 @@ const AUTO_REFRESH_MS = 5 * 60 * 1000;
 const state = {
   status: null,
   gardenState: null,
+  gardenLoadError: null,
+  selectedGardenEntityId: null,
+  gardenDirty: false,
+  gardenMap: null,
+  gardenBaseLayer: null,
+  gardenLayers: null,
+  gardenLayerById: new Map(),
   radarMap: null,
   radarBaseLayer: null,
   radarRainLayer: null,
@@ -44,10 +51,21 @@ const els = {
   gardenBadge: document.querySelector("#gardenBadge"),
   gardenSummary: document.querySelector("#gardenSummary"),
   gardenDetails: document.querySelector("#gardenDetails"),
+  gardenWorkspaceStatus: document.querySelector("#gardenWorkspaceStatus"),
+  gardenKmlMessage: document.querySelector("#gardenKmlMessage"),
+  gardenMap: document.querySelector("#gardenMap"),
+  gardenMapMessage: document.querySelector("#gardenMapMessage"),
+  gardenEntitiesCount: document.querySelector("#gardenEntitiesCount"),
   gardenEntitiesList: document.querySelector("#gardenEntitiesList"),
+  gardenEntityDetail: document.querySelector("#gardenEntityDetail"),
   gardenEntityForm: document.querySelector("#gardenEntityForm"),
+  gardenFormState: document.querySelector("#gardenFormState"),
   gardenEntityMessage: document.querySelector("#gardenEntityMessage"),
   resetGardenButton: document.querySelector("#resetGardenButton"),
+  clearGardenFormButton: document.querySelector("#clearGardenFormButton"),
+  deleteGardenEntityButton: document.querySelector("#deleteGardenEntityButton"),
+  importKmlButton: document.querySelector("#importKmlButton"),
+  exportKmlButton: document.querySelector("#exportKmlButton"),
   gardenAlertsCard: document.querySelector("#gardenAlertsCard"),
   gardenAlertsTitle: document.querySelector("#gardenAlertsTitle"),
   gardenAlertsSummary: document.querySelector("#gardenAlertsSummary"),
@@ -72,7 +90,16 @@ const els = {
 
 els.settingsForm?.addEventListener("submit", saveSettings);
 els.gardenEntityForm?.addEventListener("submit", saveGardenEntity);
+els.gardenEntityForm?.addEventListener("input", markGardenDirty);
 els.resetGardenButton?.addEventListener("click", resetGarden);
+els.clearGardenFormButton?.addEventListener("click", clearGardenSelection);
+els.deleteGardenEntityButton?.addEventListener("click", () => {
+  if (state.selectedGardenEntityId) {
+    deleteGardenEntity(state.selectedGardenEntityId);
+  }
+});
+els.importKmlButton?.addEventListener("click", showKmlUnavailable);
+els.exportKmlButton?.addEventListener("click", showKmlUnavailable);
 els.debugRefreshButton?.addEventListener("click", () => loadDebugJson("/api/debug/status"));
 els.ntfyTestButton?.addEventListener("click", sendTestNotification);
 
@@ -125,13 +152,19 @@ function scheduleNextRefresh() {
 }
 
 async function fetchGardenState() {
-  const response = await fetch("/api/garden");
+  try {
+    const response = await fetch("/api/garden");
 
-  if (!response.ok) {
+    if (!response.ok) {
+      throw new Error("Chargement du jardin impossible.");
+    }
+
+    state.gardenLoadError = null;
+    return response.json();
+  } catch (error) {
+    state.gardenLoadError = error;
     return null;
   }
-
-  return response.json();
 }
 
 async function saveSettings(event) {
@@ -202,7 +235,12 @@ async function saveGardenEntity(event) {
     return;
   }
 
-  els.gardenEntityForm.reset();
+  const savedState = await response.json();
+  const savedEntity = savedState.entities.find((item) => item.id === entity.id || item.name === entity.name) || entity;
+  state.gardenState = savedState;
+  state.selectedGardenEntityId = savedEntity.id;
+  state.gardenDirty = false;
+  fillGardenForm(savedEntity);
   els.gardenEntityMessage.textContent = "Entité enregistrée.";
   await loadStatus(true);
 }
@@ -217,6 +255,9 @@ async function deleteGardenEntity(id) {
     return;
   }
 
+  state.selectedGardenEntityId = null;
+  state.gardenDirty = false;
+  els.gardenEntityForm.reset();
   els.gardenEntityMessage.textContent = "Entité supprimée.";
   await loadStatus(true);
 }
@@ -231,6 +272,9 @@ async function resetGarden() {
     return;
   }
 
+  state.selectedGardenEntityId = null;
+  state.gardenDirty = false;
+  els.gardenEntityForm.reset();
   els.gardenEntityMessage.textContent = "Jardin réinitialisé.";
   await loadStatus(true);
 }
@@ -299,7 +343,7 @@ function renderStatus(status) {
   renderCurrentForecast(status.current);
   renderHorizons(rain.horizons || [], noSignificantRain);
   renderGarden(rain.garden, status.garden);
-  renderGardenEntities(status.garden?.entities || []);
+  renderGardenWorkspace(getGardenEntities(status), status.location);
   renderGardenAlerts(status.garden?.alerts);
   renderRadar(status.radar, status.location);
   renderSources(status.sources || []);
@@ -415,33 +459,380 @@ function renderGarden(garden, gardenState) {
   });
 }
 
+function renderGardenWorkspace(entities, location) {
+  if (els.gardenEntitiesCount) {
+    els.gardenEntitiesCount.textContent = String(entities.length);
+  }
+
+  if (els.gardenWorkspaceStatus) {
+    els.gardenWorkspaceStatus.textContent = buildGardenWorkspaceStatus(entities);
+  }
+
+  renderGardenEntities(entities);
+  renderGardenEntityDetail(entities);
+  renderGardenMap(entities, location);
+  updateGardenFormState();
+}
+
 function renderGardenEntities(entities) {
   els.gardenEntitiesList.innerHTML = "";
+  renderGardenEntityRows(entities);
+}
+
+function renderGardenEntityRows(entities) {
+  if (state.gardenLoadError) {
+    appendGardenEmptyRow(state.gardenLoadError.message);
+    return;
+  }
 
   if (!entities.length) {
-    const item = document.createElement("li");
-    item.className = "empty-row";
-    item.textContent = "Aucune entité jardin.";
-    els.gardenEntitiesList.append(item);
+    appendGardenEmptyRow("Aucune entité jardin enregistrée.");
     return;
   }
 
   entities.forEach((entity) => {
     const item = document.createElement("li");
-    item.className = "garden-entity-row";
-
-    const body = document.createElement("div");
-    body.innerHTML = `<strong>${entity.name}</strong><span>${entity.type}${entity.tags?.length ? ` · ${entity.tags.join(", ")}` : ""}</span>`;
-
     const button = document.createElement("button");
-    button.type = "button";
-    button.className = "secondary danger-button";
-    button.textContent = "Supprimer";
-    button.addEventListener("click", () => deleteGardenEntity(entity.id));
 
-    item.append(body, button);
+    item.className = "garden-entity-row";
+    item.dataset.selected = String(entity.id === state.selectedGardenEntityId);
+    button.type = "button";
+    button.className = "garden-entity-select";
+    button.innerHTML = `
+      <strong>${escapeHtml(entity.name)}</strong>
+      <span>${escapeHtml(formatGardenEntityMeta(entity))}</span>
+    `;
+    button.addEventListener("click", () => selectGardenEntity(entity.id));
+
+    item.append(button);
     els.gardenEntitiesList.append(item);
   });
+}
+
+function appendGardenEmptyRow(message) {
+  const item = document.createElement("li");
+  item.className = "empty-row";
+  item.textContent = message;
+  els.gardenEntitiesList.append(item);
+}
+
+function renderGardenEntityDetail(entities) {
+  const selected = getSelectedGardenEntity(entities);
+
+  if (!els.gardenEntityDetail) {
+    return;
+  }
+
+  if (!selected) {
+    els.gardenEntityDetail.innerHTML = `
+      <p class="muted">${entities.length ? "Sélectionne une entité dans la liste ou sur la carte." : "Le jardin est vide pour le moment."}</p>
+    `;
+    els.deleteGardenEntityButton.disabled = true;
+    return;
+  }
+
+  els.gardenEntityDetail.innerHTML = `
+    <h3>${escapeHtml(selected.name)}</h3>
+    <dl>
+      <div><dt>Type</dt><dd>${escapeHtml(selected.type || "other")}</dd></div>
+      <div><dt>Tags</dt><dd>${escapeHtml(selected.tags?.length ? selected.tags.join(", ") : "Aucun tag")}</dd></div>
+      <div><dt>Position</dt><dd>${escapeHtml(formatGardenPosition(selected))}</dd></div>
+      <div><dt>Notes</dt><dd>${escapeHtml(selected.notes || "Aucune note")}</dd></div>
+    </dl>
+  `;
+  els.deleteGardenEntityButton.disabled = false;
+}
+
+function renderGardenMap(entities, location) {
+  if (!els.gardenMap) {
+    return;
+  }
+
+  if (!window.L) {
+    els.gardenMap.innerHTML = "<div class=\"radar-empty\">Carte indisponible : Leaflet n'a pas été chargé.</div>";
+    return;
+  }
+
+  const center = getGardenMapCenter(entities, location);
+
+  if (!center) {
+    els.gardenMap.innerHTML = '<div class="radar-empty">Position jardin indisponible.</div>';
+    return;
+  }
+
+  ensureGardenMap(center);
+  updateGardenLayers(entities);
+
+  window.setTimeout(() => {
+    state.gardenMap.invalidateSize();
+  }, 0);
+}
+
+function ensureGardenMap(center) {
+  if (!state.gardenMap) {
+    state.gardenMap = window.L.map(els.gardenMap, {
+      zoomControl: true,
+      scrollWheelZoom: false
+    }).setView(center, 16);
+
+    state.gardenBaseLayer = window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 20,
+      attribution: "&copy; OpenStreetMap"
+    }).addTo(state.gardenMap);
+
+    state.gardenLayers = window.L.layerGroup().addTo(state.gardenMap);
+  } else {
+    state.gardenMap.setView(center, state.gardenMap.getZoom() || 16);
+  }
+}
+
+function updateGardenLayers(entities) {
+  const bounds = [];
+  state.gardenLayers.clearLayers();
+  state.gardenLayerById.clear();
+
+  entities.forEach((entity) => {
+    const layer = createGardenEntityLayer(entity);
+
+    if (!layer) {
+      return;
+    }
+
+    layer.addTo(state.gardenLayers);
+    layer.on("click", () => selectGardenEntity(entity.id));
+    state.gardenLayerById.set(entity.id, layer);
+
+    const layerBounds = getLayerBounds(layer);
+    if (layerBounds) {
+      bounds.push(layerBounds);
+    }
+  });
+
+  const selectedLayer = state.gardenLayerById.get(state.selectedGardenEntityId);
+  if (selectedLayer?.setStyle) {
+    selectedLayer.setStyle({ weight: 4, color: "#1b4332" });
+  }
+
+  if (bounds.length) {
+    const groupBounds = bounds.reduce((acc, item) => acc.extend(item), bounds[0]);
+    state.gardenMap.fitBounds(groupBounds.pad(0.2), { maxZoom: 17 });
+    els.gardenMapMessage.textContent = "Carte Jardin dédiée, sans couche radar.";
+  } else {
+    els.gardenMapMessage.textContent = "Aucune position ou géométrie exploitable dans les entités actuelles.";
+  }
+}
+
+function createGardenEntityLayer(entity) {
+  const geometry = entity.position?.geometry;
+
+  if (geometry?.type === "Point") {
+    return window.L.marker([geometry.coordinates[1], geometry.coordinates[0]]).bindPopup(entity.name);
+  }
+
+  if (geometry?.type === "LineString") {
+    return window.L.polyline(geometry.coordinates.map(toLatLng), getGardenVectorStyle(entity)).bindPopup(entity.name);
+  }
+
+  if (geometry?.type === "Polygon") {
+    return window.L.polygon(geometry.coordinates.map((ring) => ring.map(toLatLng)), getGardenVectorStyle(entity)).bindPopup(entity.name);
+  }
+
+  if (Number.isFinite(entity.position?.latitude) && Number.isFinite(entity.position?.longitude)) {
+    return window.L.marker([entity.position.latitude, entity.position.longitude]).bindPopup(entity.name);
+  }
+
+  return null;
+}
+
+function selectGardenEntity(id) {
+  const entities = getGardenEntities(state.status);
+  const entity = entities.find((item) => item.id === id);
+
+  if (!entity) {
+    return;
+  }
+
+  state.selectedGardenEntityId = id;
+  state.gardenDirty = false;
+  fillGardenForm(entity);
+  renderGardenWorkspace(entities, state.status?.location);
+
+  const layer = state.gardenLayerById.get(id);
+  if (layer?.openPopup) {
+    layer.openPopup();
+  }
+}
+
+function clearGardenSelection() {
+  state.selectedGardenEntityId = null;
+  state.gardenDirty = false;
+  els.gardenEntityForm.reset();
+  renderGardenWorkspace(getGardenEntities(state.status), state.status?.location);
+}
+
+function fillGardenForm(entity) {
+  setGardenFormValue("id", entity.id || "");
+  setGardenFormValue("type", entity.type || "other");
+  setGardenFormValue("name", entity.name || "");
+  setGardenFormValue("tags", entity.tags?.join(", ") || "");
+  setGardenFormValue("positionLabel", entity.position?.label || "");
+  setGardenFormValue("notes", entity.notes || "");
+}
+
+function setGardenFormValue(name, value) {
+  const field = els.gardenEntityForm?.elements.namedItem(name);
+
+  if (field) {
+    field.value = value;
+  }
+}
+
+function markGardenDirty() {
+  state.gardenDirty = true;
+  updateGardenFormState();
+}
+
+function updateGardenFormState() {
+  if (!els.gardenFormState) {
+    return;
+  }
+
+  if (state.gardenDirty) {
+    els.gardenFormState.textContent = "Modifications non enregistrées.";
+  } else if (state.selectedGardenEntityId) {
+    els.gardenFormState.textContent = "Entité sélectionnée synchronisée avec la liste et la carte.";
+  } else {
+    els.gardenFormState.textContent = "Aucune modification en cours.";
+  }
+}
+
+function showKmlUnavailable() {
+  els.gardenKmlMessage.textContent = "Import/export KML bientôt disponible après intégration du module et de l'API KML.";
+}
+
+function getGardenEntities(status) {
+  return state.gardenState?.entities || status?.garden?.entities || [];
+}
+
+function getSelectedGardenEntity(entities) {
+  return entities.find((entity) => entity.id === state.selectedGardenEntityId) || null;
+}
+
+function buildGardenWorkspaceStatus(entities) {
+  if (state.gardenLoadError) {
+    return state.gardenLoadError.message;
+  }
+
+  if (!entities.length) {
+    return "Aucune entité GardenState enregistrée.";
+  }
+
+  const count = entities.length;
+  return `${count} ${count > 1 ? "entités GardenState" : "entité GardenState"} chargée${count > 1 ? "s" : ""}.`;
+}
+
+function formatGardenEntityMeta(entity) {
+  const parts = [entity.type || "other"];
+
+  if (entity.tags?.length) {
+    parts.push(entity.tags.join(", "));
+  }
+
+  if (entity.position?.label) {
+    parts.push(entity.position.label);
+  }
+
+  return parts.join(" - ");
+}
+
+function formatGardenPosition(entity) {
+  if (entity.position?.label) {
+    return entity.position.label;
+  }
+
+  if (Number.isFinite(entity.position?.latitude) && Number.isFinite(entity.position?.longitude)) {
+    return `${formatCoord(entity.position.latitude)}, ${formatCoord(entity.position.longitude)}`;
+  }
+
+  if (entity.position?.geometry?.type) {
+    return entity.position.geometry.type;
+  }
+
+  return "Non renseignée";
+}
+
+function getGardenVectorStyle(entity) {
+  return {
+    color: entity.id === state.selectedGardenEntityId ? "#1b4332" : "#2d6a4f",
+    fillColor: "#74c69d",
+    fillOpacity: 0.22,
+    opacity: 0.9,
+    weight: entity.id === state.selectedGardenEntityId ? 4 : 2
+  };
+}
+
+function getGardenMapCenter(entities, location) {
+  const firstPosition = entities.map((entity) => entity.position).find((position) => Number.isFinite(position?.latitude) && Number.isFinite(position?.longitude));
+
+  if (firstPosition) {
+    return [firstPosition.latitude, firstPosition.longitude];
+  }
+
+  const geometryPoint = entities.map((entity) => getFirstGeometryCoordinate(entity.position?.geometry)).find(Boolean);
+
+  if (geometryPoint) {
+    return geometryPoint;
+  }
+
+  if (Number.isFinite(location?.latitude) && Number.isFinite(location?.longitude)) {
+    return [Number(location.latitude), Number(location.longitude)];
+  }
+
+  return null;
+}
+
+function getFirstGeometryCoordinate(geometry) {
+  if (geometry?.type === "Point") {
+    return toLatLng(geometry.coordinates);
+  }
+
+  if (geometry?.type === "LineString") {
+    return toLatLng(geometry.coordinates?.[0]);
+  }
+
+  if (geometry?.type === "Polygon") {
+    return toLatLng(geometry.coordinates?.[0]?.[0]);
+  }
+
+  return null;
+}
+
+function getLayerBounds(layer) {
+  if (layer.getBounds) {
+    return layer.getBounds();
+  }
+
+  if (layer.getLatLng) {
+    return window.L.latLngBounds([layer.getLatLng()]);
+  }
+
+  return null;
+}
+
+function toLatLng(coordinates) {
+  return Array.isArray(coordinates) && coordinates.length >= 2
+    ? [Number(coordinates[1]), Number(coordinates[0])]
+    : null;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#039;"
+  })[char]);
 }
 
 function renderGardenAlerts(alerts) {
@@ -637,6 +1028,10 @@ function activatePanel(name) {
 
   if (name === "diagnostic") {
     loadDebugJson("/api/debug/status");
+  }
+
+  if (name === "garden" && state.gardenMap) {
+    window.setTimeout(() => state.gardenMap.invalidateSize(), 0);
   }
 }
 
