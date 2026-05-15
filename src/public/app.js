@@ -14,6 +14,30 @@ const GARDEN_ENTITY_COLORS = {
   other: "#7c8a80"
 };
 
+const FORECAST_EXTERNAL_SOURCE_ORDER = ["arome", "metNorway"];
+
+const FORECAST_SOURCE_LABELS = {
+  arome: "AROME",
+  metNorway: "MET Norway",
+  wgf: "WGF"
+};
+
+const WEATHER_ICON_FILES = {
+  sun: "weather-sun.svg",
+  partlyCloudy: "weather-partly-cloudy.svg",
+  cloud: "weather-cloud.svg",
+  lightRain: "weather-light-rain.svg",
+  moderateRain: "weather-moderate-rain.svg",
+  heavyRain: "weather-heavy-rain.svg",
+  wind: "weather-wind.svg",
+  gust: "weather-gust.svg",
+  frost: "weather-frost.svg",
+  fog: "weather-fog.svg",
+  storm: "weather-storm.svg",
+  uncertain: "weather-uncertain.svg",
+  unavailable: "weather-unavailable.svg"
+};
+
 const state = {
   status: null,
   gardenState: null,
@@ -589,11 +613,14 @@ function renderForecastComparison(comparison) {
   }
 
   const horizons = Array.isArray(comparison?.horizons) ? comparison.horizons : [];
+  const columns = getForecastComparisonColumns(horizons);
+
   els.forecastComparisonCard.hidden = false;
   els.forecastComparisonGeneratedAt.textContent = comparison?.generatedAt
     ? `Weather Garden Forecast · généré le ${formatDate(comparison.generatedAt)}`
     : "Weather Garden Forecast · comparatif indisponible";
   els.forecastComparisonBody.innerHTML = "";
+  els.forecastComparisonBody.style.setProperty("--forecast-source-columns", String(columns.length || 3));
 
   if (!horizons.length) {
     const empty = document.createElement("p");
@@ -604,10 +631,15 @@ function renderForecastComparison(comparison) {
   }
 
   const header = document.createElement("div");
+  const horizonHeader = document.createElement("span");
+
   header.className = "forecast-comparison-header";
-  ["Horizon", "AROME", "MET Norway", "WGF"].forEach((label) => {
+  horizonHeader.textContent = "Horizon";
+  header.append(horizonHeader);
+
+  columns.forEach((column) => {
     const item = document.createElement("span");
-    item.textContent = label;
+    item.textContent = column.label;
     header.append(item);
   });
   els.forecastComparisonBody.append(header);
@@ -619,19 +651,64 @@ function renderForecastComparison(comparison) {
     row.className = "forecast-comparison-row";
     horizonLabel.className = "forecast-comparison-horizon";
     horizonLabel.textContent = horizon.label || formatDuration(horizon.minutes);
+    row.append(horizonLabel);
 
-    row.append(
-      horizonLabel,
-      buildForecastSourceCell("AROME", horizon.sources?.arome),
-      buildForecastSourceCell("MET Norway", horizon.sources?.metNorway),
-      buildForecastSourceCell("WGF", horizon.sources?.wgf, true)
-    );
+    columns.forEach((column) => {
+      row.append(buildForecastSourceCell(column.label, horizon.sources?.[column.key], column.isWgf));
+    });
+
     els.forecastComparisonBody.append(row);
   });
 }
 
+function getForecastComparisonColumns(horizons) {
+  const availableKeys = new Set();
+
+  horizons.forEach((horizon) => {
+    Object.keys(horizon.sources || {}).forEach((key) => availableKeys.add(key));
+  });
+
+  const externalKeys = [
+    ...FORECAST_EXTERNAL_SOURCE_ORDER.filter((key) => availableKeys.has(key)),
+    ...Array.from(availableKeys)
+      .filter((key) => key !== "wgf" && !FORECAST_EXTERNAL_SOURCE_ORDER.includes(key))
+      .sort()
+  ];
+  const columns = externalKeys.map((key) => ({
+    key,
+    label: formatForecastSourceLabel(key),
+    isWgf: false
+  }));
+
+  if (availableKeys.has("wgf")) {
+    columns.push({ key: "wgf", label: formatForecastSourceLabel("wgf"), isWgf: true });
+  }
+
+  return columns.length
+    ? columns
+    : [
+      { key: "arome", label: "AROME", isWgf: false },
+      { key: "metNorway", label: "MET Norway", isWgf: false },
+      { key: "wgf", label: "WGF", isWgf: true }
+    ];
+}
+
+function formatForecastSourceLabel(key) {
+  if (FORECAST_SOURCE_LABELS[key]) {
+    return FORECAST_SOURCE_LABELS[key];
+  }
+
+  return String(key)
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[-_]+/g, " ")
+    .replace(/^./, (char) => char.toUpperCase());
+}
+
 function buildForecastSourceCell(label, source, isWgf = false) {
   const cell = document.createElement("div");
+  const heading = document.createElement("span");
+  const icon = document.createElement("img");
+  const headingText = document.createElement("span");
   const cellLabel = document.createElement("span");
   const status = document.createElement("span");
   const body = document.createElement("span");
@@ -639,6 +716,13 @@ function buildForecastSourceCell(label, source, isWgf = false) {
 
   cell.className = `forecast-source-cell${isWgf ? " forecast-source-wgf" : ""}`;
   cell.dataset.state = source?.state || "unavailable";
+  heading.className = "forecast-source-heading";
+  icon.className = "forecast-source-icon";
+  icon.src = buildForecastWeatherIconPath(source, isWgf);
+  icon.alt = "";
+  icon.loading = "lazy";
+  icon.setAttribute("aria-hidden", "true");
+  headingText.className = "forecast-source-heading-text";
   cellLabel.className = "forecast-cell-label";
   cellLabel.textContent = label;
   status.className = "forecast-source-state";
@@ -647,7 +731,9 @@ function buildForecastSourceCell(label, source, isWgf = false) {
   body.textContent = formatForecastSourceMain(source, isWgf);
   reason.className = "forecast-source-reason";
 
-  cell.append(cellLabel, status, body);
+  headingText.append(cellLabel, status);
+  heading.append(icon, headingText);
+  cell.append(heading, body);
 
   if (isWgf) {
     appendWgfReason(reason, source);
@@ -660,6 +746,175 @@ function buildForecastSourceCell(label, source, isWgf = false) {
   }
 
   return cell;
+}
+
+function buildForecastWeatherIconPath(source, isWgf) {
+  const family = isWgf ? "wgf" : "source";
+  return `assets/weather-icons/${family}/${getForecastWeatherIconName(source)}`;
+}
+
+function getForecastWeatherIconName(source) {
+  if (!source?.available || source.state === "unavailable") {
+    return WEATHER_ICON_FILES.unavailable;
+  }
+
+  const textIcon = getForecastWeatherIconFromText(source);
+
+  if (textIcon) {
+    return textIcon;
+  }
+
+  const codeIcon = getForecastWeatherIconFromCode(source.weatherCode ?? source.weather_code ?? source.code);
+
+  if (codeIcon) {
+    return codeIcon;
+  }
+
+  if (source.confidence === "low" || source.summary === "Signal incomplet.") {
+    return WEATHER_ICON_FILES.uncertain;
+  }
+
+  if (Number.isFinite(source.temperatureC) && source.temperatureC <= 1) {
+    return WEATHER_ICON_FILES.frost;
+  }
+
+  if (
+    Number.isFinite(source.gustKmh)
+    && source.gustKmh >= 70
+    && Number.isFinite(source.precipitationMm)
+    && source.precipitationMm >= 5
+  ) {
+    return WEATHER_ICON_FILES.storm;
+  }
+
+  if (Number.isFinite(source.precipitationMm)) {
+    if (source.precipitationMm >= 8) {
+      return WEATHER_ICON_FILES.heavyRain;
+    }
+
+    if (source.precipitationMm >= 2) {
+      return WEATHER_ICON_FILES.moderateRain;
+    }
+
+    if (source.precipitationMm >= 0.05) {
+      return WEATHER_ICON_FILES.lightRain;
+    }
+  }
+
+  if (Number.isFinite(source.gustKmh) && source.gustKmh >= 50) {
+    return WEATHER_ICON_FILES.gust;
+  }
+
+  if (Number.isFinite(source.windKmh) && source.windKmh >= 35) {
+    return WEATHER_ICON_FILES.wind;
+  }
+
+  if (Number.isFinite(source.precipitationMm)) {
+    return WEATHER_ICON_FILES.partlyCloudy;
+  }
+
+  return WEATHER_ICON_FILES.uncertain;
+}
+
+function getForecastWeatherIconFromText(source) {
+  const text = [source.summary, source.reason, source.weather, source.weatherLabel, source.symbolCode]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  if (!text) {
+    return null;
+  }
+
+  if (text.includes("orage") || text.includes("storm") || text.includes("thunder")) {
+    return WEATHER_ICON_FILES.storm;
+  }
+
+  if (text.includes("brouillard") || text.includes("brume") || text.includes("fog")) {
+    return WEATHER_ICON_FILES.fog;
+  }
+
+  if (text.includes("gel") || text.includes("frost")) {
+    return WEATHER_ICON_FILES.frost;
+  }
+
+  if (text.includes("rafale") || text.includes("gust")) {
+    return WEATHER_ICON_FILES.gust;
+  }
+
+  if (text.includes("vent") || text.includes("wind")) {
+    return WEATHER_ICON_FILES.wind;
+  }
+
+  if (text.includes("pas de pluie") || text.includes("no significant rain")) {
+    return WEATHER_ICON_FILES.partlyCloudy;
+  }
+
+  if (text.includes("pluie marquee") || text.includes("pluie forte") || text.includes("heavy rain")) {
+    return WEATHER_ICON_FILES.heavyRain;
+  }
+
+  if (text.includes("pluie moderee") || text.includes("moderate rain")) {
+    return WEATHER_ICON_FILES.moderateRain;
+  }
+
+  if (text.includes("pluie") || text.includes("rain")) {
+    return WEATHER_ICON_FILES.lightRain;
+  }
+
+  if (text.includes("nuage") || text.includes("cloud")) {
+    return WEATHER_ICON_FILES.cloud;
+  }
+
+  if (text.includes("soleil") || text.includes("sun")) {
+    return WEATHER_ICON_FILES.sun;
+  }
+
+  return null;
+}
+
+function getForecastWeatherIconFromCode(value) {
+  const code = Number(value);
+
+  if (!Number.isFinite(code)) {
+    return null;
+  }
+
+  if (code === 0) {
+    return WEATHER_ICON_FILES.sun;
+  }
+
+  if (code === 1 || code === 2) {
+    return WEATHER_ICON_FILES.partlyCloudy;
+  }
+
+  if (code === 3) {
+    return WEATHER_ICON_FILES.cloud;
+  }
+
+  if (code === 45 || code === 48) {
+    return WEATHER_ICON_FILES.fog;
+  }
+
+  if ((code >= 51 && code <= 57) || (code >= 80 && code <= 81)) {
+    return WEATHER_ICON_FILES.lightRain;
+  }
+
+  if ((code >= 61 && code <= 67) || code === 82) {
+    return WEATHER_ICON_FILES.moderateRain;
+  }
+
+  if (code >= 71 && code <= 77) {
+    return WEATHER_ICON_FILES.frost;
+  }
+
+  if (code >= 95 && code <= 99) {
+    return WEATHER_ICON_FILES.storm;
+  }
+
+  return WEATHER_ICON_FILES.uncertain;
 }
 
 function formatForecastSourceMain(source, isWgf) {
