@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_LOCATION, DEFAULT_SETTINGS, buildWeatherStatus } from "../src/scoring.js";
 import { buildGardenStatus, buildGeneratedGardenAlerts, normalizeGardenState } from "../src/garden.js";
+import { normalizeEcowittPayload } from "../src/sources/ecowitt.js";
 
 describe("weather scoring", () => {
   it("builds a compact no-rain signal when all forecast windows are dry", () => {
@@ -101,5 +102,70 @@ describe("weather scoring", () => {
     expect(alerts.some((alert) => alert.id === "north-vine-frost-risk")).toBe(true);
     expect(alerts.some((alert) => alert.id === "north-vine-wind-risk")).toBe(true);
     expect(alerts[0].details.every((detail) => typeof detail === "string")).toBe(true);
+  });
+
+  it("marks stale Ecowitt observations in status.sources without exposing raw payloads", () => {
+    const now = new Date("2026-05-06T12:00:00.000Z");
+    const ecowittObservation = normalizeEcowittPayload({
+      code: 0,
+      data: {
+        outdoor: {
+          temperature: { value: "12.5", unit: "C", time: "2026-05-06T11:00:00.000Z" },
+          humidity: { value: "84", unit: "%", time: "2026-05-06T11:00:00.000Z" }
+        },
+        rainfall: {
+          rain_rate: { value: "0.4", unit: "mm/h", time: "2026-05-06T11:00:00.000Z" }
+        },
+        wind: {
+          wind_speed: { value: "5", unit: "km/h", time: "2026-05-06T11:00:00.000Z" }
+        },
+        soil_ch1: {
+          soilmoisture: { value: "42", unit: "%", time: "2026-05-06T11:00:00.000Z" }
+        }
+      }
+    }, { staleMinutes: 20 });
+
+    const status = buildWeatherStatus({
+      location: DEFAULT_LOCATION,
+      settings: DEFAULT_SETTINGS,
+      openMeteo: null,
+      metNorway: null,
+      meteoFranceRadar: null,
+      rainViewer: null,
+      ecowittObservation,
+      now
+    });
+    const source = status.sources.find((item) => item.id === "ecowitt");
+
+    expect(ecowittObservation).not.toHaveProperty("raw");
+    expect(ecowittObservation.diagnostics.availableSensors).toContain("soil_ch1.soilmoisture");
+    expect(source).toMatchObject({
+      id: "ecowitt",
+      ok: true,
+      status: "stale",
+      stale: true
+    });
+    expect(status.stationObservation).toBeNull();
+  });
+
+  it("marks available forecast sources as fresh and missing sources as unavailable", () => {
+    const now = new Date("2026-05-06T12:00:00.000Z");
+    const status = buildWeatherStatus({
+      location: DEFAULT_LOCATION,
+      settings: DEFAULT_SETTINGS,
+      openMeteo: {
+        ok: true,
+        fetchedAt: now.toISOString(),
+        current: { precipitation: 0, rain: 0 },
+        minutely15: []
+      },
+      metNorway: null,
+      meteoFranceRadar: null,
+      rainViewer: null,
+      now
+    });
+
+    expect(status.sources.find((item) => item.id === "open-meteo-arome").status).toBe("fresh");
+    expect(status.sources.find((item) => item.id === "met-norway").status).toBe("unavailable");
   });
 });

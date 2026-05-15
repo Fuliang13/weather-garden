@@ -344,12 +344,14 @@ function buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer
       id: "open-meteo-arome",
       label: "Open-Meteo AROME",
       ok: !!openMeteo?.ok,
+      status: getSourceFreshness(openMeteo),
       updatedAt: openMeteo?.fetchedAt || null
     },
     {
       id: "met-norway",
       label: "MET Norway",
       ok: !!metNorway?.ok,
+      status: getSourceFreshness(metNorway),
       updatedAt: metNorway?.fetchedAt || null
     },
     {
@@ -357,6 +359,7 @@ function buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer
       label: "Météo-France radar",
       ok: !!meteoFranceRadar?.ok,
       enabled: !!meteoFranceRadar?.enabled,
+      status: getSourceFreshness(meteoFranceRadar),
       updatedAt: meteoFranceRadar?.fetchedAt || null,
       message: meteoFranceRadar?.message || null
     },
@@ -364,6 +367,7 @@ function buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer
       id: "rainviewer",
       label: "RainViewer",
       ok: !!rainViewer?.ok,
+      status: getSourceFreshness(rainViewer),
       updatedAt: rainViewer?.fetchedAt || null,
       imageUrl: rainViewer?.imageUrl || null
     },
@@ -372,6 +376,8 @@ function buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer
       label: ecowittObservation?.label || "Ecowitt",
       ok: !!ecowittObservation?.ok,
       enabled: ecowittObservation ? !!ecowittObservation.enabled : undefined,
+      status: getSourceFreshness(ecowittObservation),
+      stale: ecowittObservation?.stale ?? undefined,
       updatedAt: ecowittObservation?.updatedAt || ecowittObservation?.fetchedAt || null,
       message: ecowittObservation?.message || null
     }
@@ -379,6 +385,14 @@ function buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer
     ...source,
     errors: errors.filter((error) => error.source === source.id).map((error) => error.message)
   }));
+}
+
+function getSourceFreshness(source) {
+  if (!source?.ok) {
+    return "unavailable";
+  }
+
+  return source.stale ? "stale" : "fresh";
 }
 
 function computeOpenMeteoScore(openMeteo, minutes, settings, nowMs) {

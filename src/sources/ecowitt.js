@@ -94,8 +94,7 @@ export function normalizeEcowittPayload(payload, { label = "Station locale", sta
       batterySensors: sensorDiagnostics.filter((sensor) => sensor.path.toLowerCase().includes("battery")),
       signalSensors: sensorDiagnostics.filter((sensor) => sensor.path.toLowerCase().includes("signal")),
       availableSensors: sensorDiagnostics.map((sensor) => sensor.path)
-    },
-    raw: payload
+    }
   };
 }
 

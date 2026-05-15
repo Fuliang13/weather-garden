@@ -337,7 +337,7 @@ async function downloadAndInspectMeteoFranceHdf5(fetchBinary, productUrl) {
     signature: bytesToHex(bytes.slice(0, METEOFRANCE_HDF5_SIGNATURE.length)),
     signatureOk,
     structure,
-    error: signatureOk ? null : "Downloaded product does not start with the expected HDF5 signature."
+    error: signatureOk ? null : "Downloaded product does not start with a valid HDF5 signature."
   });
 }
 
@@ -357,8 +357,9 @@ function buildHdf5Diagnostics({
   const projection = extractMeteoFranceProjection(structure);
   const bounds = extractMeteoFranceBounds(structure);
   const dimensions = radarDataset?.dimensions || null;
-  const canDecodeGrid = !!radarDataset && !!projection && !!bounds && isMeteoFranceDatasetReadableForNativeLayer(radarDataset);
-  const nativeLayerBlocker = buildMeteoFranceNativeLayerBlocker({ radarDataset, projection, bounds });
+  const nativeLayerCriteria = buildMeteoFranceNativeLayerCriteria({ signatureOk, structure, radarDataset, projection, bounds });
+  const canDecodeGrid = nativeLayerCriteria.valuesReadable;
+  const nativeLayerBlocker = buildMeteoFranceNativeLayerBlocker({ radarDataset, projection, bounds, nativeLayerCriteria });
   const fallbackError = buildMeteoFranceHdf5ParsingError({ signatureOk, structure, radarDataset, projection, bounds, nativeLayerBlocker });
 
   return {
@@ -385,6 +386,7 @@ function buildHdf5Diagnostics({
     unit: radarDataset ? getHdf5AttributeValue(radarDataset.attributes, ["unit", "units", "unite"]) : null,
     scaleFactor: radarDataset ? getHdf5AttributeValue(radarDataset.attributes, ["scale_factor", "scale", "factor", "facteur_echelle"]) : null,
     missingValue: radarDataset ? getHdf5AttributeValue(radarDataset.attributes, ["missing_value", "_fillvalue", "nodata", "no_data", "fill_value"]) : null,
+    nativeLayerCriteria,
     nativeLayerBlocker,
     error: sanitizeMeteoFranceMessage(error || fallbackError)
   };
@@ -958,16 +960,10 @@ function readHdf5GroupBtreeNode(context, address, heap, visited) {
 
   if (nodeLevel === 0) {
     for (let index = 0; index < entriesUsed; index++) {
-      const nameOffset = readHdf5Length(context, cursor);
       cursor += context.lengthSize;
-      const symbolTableEntry = readHdf5SymbolTableEntry(context, cursor);
-      cursor += getHdf5SymbolTableEntrySize(context);
-      const name = readHdf5HeapString(context, heap, nameOffset) || `entry-${index}`;
-      entries.push({
-        ...symbolTableEntry,
-        name,
-        nameOffset
-      });
+      const symbolTableNodeAddress = readHdf5Offset(context, cursor);
+      cursor += context.offsetSize;
+      entries.push(...readHdf5SymbolTableNode(context, symbolTableNodeAddress, heap));
     }
 
     return entries;
@@ -978,6 +974,37 @@ function readHdf5GroupBtreeNode(context, address, heap, visited) {
     const childAddress = readHdf5Offset(context, cursor);
     cursor += context.offsetSize;
     entries.push(...readHdf5GroupBtreeNode(context, childAddress, heap, visited));
+  }
+
+  return entries;
+}
+
+function readHdf5SymbolTableNode(context, address, heap) {
+  if (!Number.isFinite(address)) {
+    return [];
+  }
+
+  assertHdf5Ascii(context, address, "SNOD");
+
+  const version = readUInt8(context, address + 4);
+  const entryCount = readUInt16(context, address + 6);
+  const entries = [];
+  let cursor = address + 8;
+
+  if (version !== 1) {
+    context.errors.push(`Unsupported HDF5 symbol table node version ${version}.`);
+    return entries;
+  }
+
+  for (let index = 0; index < entryCount; index++) {
+    const symbolTableEntry = readHdf5SymbolTableEntry(context, cursor);
+    cursor += getHdf5SymbolTableEntrySize(context);
+    const name = readHdf5HeapString(context, heap, symbolTableEntry.linkNameOffset) || `entry-${index}`;
+    entries.push({
+      ...symbolTableEntry,
+      name,
+      nameOffset: symbolTableEntry.linkNameOffset
+    });
   }
 
   return entries;
@@ -1491,9 +1518,43 @@ function isMeteoFranceDatasetReadableForNativeLayer(dataset) {
   return !(dataset.filters || []).some((filter) => !filter.supported);
 }
 
-function buildMeteoFranceNativeLayerBlocker({ radarDataset, projection, bounds }) {
+function buildMeteoFranceNativeLayerCriteria({ signatureOk, structure, radarDataset, projection, bounds }) {
+  const dimensions = radarDataset?.dimensions || [];
+  const dimensionsKnown = Array.isArray(dimensions) && dimensions.length >= 2 && dimensions.every(Number.isFinite);
+  const expectedDimensionsMatch = dimensionsKnown && hasExpectedMeteoFranceRadarDimensions(radarDataset);
+  const valuesReadable = !!radarDataset
+    && dimensionsKnown
+    && expectedDimensionsMatch
+    && !!projection
+    && !!bounds
+    && isMeteoFranceDatasetReadableForNativeLayer(radarDataset);
+
+  return {
+    signatureOk: !!signatureOk,
+    structureParsed: !!structure?.parsingOk,
+    radarDatasetIdentified: !!radarDataset,
+    dimensionsKnown,
+    expectedDimensions: METEOFRANCE_HDF5_EXPECTED_DIMENSIONS,
+    expectedDimensionsMatch,
+    projectionFound: !!projection,
+    boundsFound: !!bounds,
+    valuesReadable,
+    valuesDecoded: false,
+    imageBuilt: false
+  };
+}
+
+function buildMeteoFranceNativeLayerBlocker({ radarDataset, projection, bounds, nativeLayerCriteria }) {
   if (!radarDataset) {
     return "no usable radar accumulation dataset was identified in the HDF5 structure";
+  }
+
+  if (!nativeLayerCriteria.dimensionsKnown) {
+    return "radar dataset dimensions were not found in the HDF5 structure";
+  }
+
+  if (!nativeLayerCriteria.expectedDimensionsMatch) {
+    return `radar dataset dimensions ${JSON.stringify(radarDataset.dimensions)} do not match the expected ${METEOFRANCE_HDF5_EXPECTED_DIMENSIONS.width}x${METEOFRANCE_HDF5_EXPECTED_DIMENSIONS.height} grid`;
   }
 
   if (!projection) {
@@ -1514,12 +1575,12 @@ function buildMeteoFranceNativeLayerBlocker({ radarDataset, projection, bounds }
     return unsupportedFilter.reason || `dataset filter ${unsupportedFilter.name || unsupportedFilter.id} is not decoded yet`;
   }
 
-  return null;
+  return "native raster value decoding and image generation are not implemented yet";
 }
 
 function buildMeteoFranceHdf5ParsingError({ signatureOk, structure, radarDataset, projection, bounds, nativeLayerBlocker }) {
   if (!signatureOk) {
-    return "Downloaded product does not start with the expected HDF5 signature.";
+    return "Downloaded product does not start with a valid HDF5 signature.";
   }
 
   if (!structure?.parsingOk) {

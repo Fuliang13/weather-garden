@@ -143,7 +143,19 @@ describe("Meteo-France radar source", () => {
           dimensions: [3472, 3472],
           unit: "centiemes de mm",
           scaleFactor: 0.01,
-          missingValue: 65535
+          missingValue: 65535,
+          nativeLayerCriteria: {
+            signatureOk: true,
+            structureParsed: true,
+            radarDatasetIdentified: true,
+            dimensionsKnown: true,
+            expectedDimensionsMatch: true,
+            projectionFound: true,
+            boundsFound: true,
+            valuesReadable: false,
+            valuesDecoded: false,
+            imageBuilt: false
+          }
         },
         nativeLayerAvailable: false
       }
@@ -417,7 +429,16 @@ describe("Meteo-France radar source", () => {
             width: 3472,
             height: 3472
           },
-          canDecodeGrid: false
+          canDecodeGrid: false,
+          nativeLayerCriteria: {
+            radarDatasetIdentified: true,
+            expectedDimensionsMatch: true,
+            projectionFound: true,
+            boundsFound: true,
+            valuesReadable: false,
+            valuesDecoded: false,
+            imageBuilt: false
+          }
         },
         nativeLayerAvailable: false,
         frameLimit: 24,
@@ -490,6 +511,7 @@ function buildMinimalHdf5Fixture() {
   const heapAddress = 800;
   const heapDataAddress = 900;
   const dataHeaderAddress = 1024;
+  const symbolTableNodeAddress = 2200;
   const qualityHeaderAddress = 3000;
 
   writeBytes(bytes, 0, [0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -513,6 +535,9 @@ function buildMinimalHdf5Fixture() {
   writeLocalHeap(bytes, view, heapAddress, heapData.bytes.length, heapDataAddress);
 
   writeBtreeLeaf(bytes, view, btreeAddress, [
+    { symbolTableNodeAddress }
+  ]);
+  writeSymbolTableNode(bytes, view, symbolTableNodeAddress, [
     { nameOffset: heapData.offsets.data1, objectHeaderAddress: dataHeaderAddress },
     { nameOffset: heapData.offsets.quality1, objectHeaderAddress: qualityHeaderAddress }
   ]);
@@ -700,8 +725,20 @@ function writeBtreeLeaf(bytes, view, address, entries) {
   let cursor = address + 24;
 
   entries.forEach((entry) => {
-    writeU64(view, cursor, entry.nameOffset);
+    writeU64(view, cursor, 0);
     cursor += 8;
+    writeU64(view, cursor, entry.symbolTableNodeAddress);
+    cursor += 8;
+  });
+}
+
+function writeSymbolTableNode(bytes, view, address, entries) {
+  writeBytes(bytes, address, asciiBytes("SNOD"));
+  bytes[address + 4] = 1;
+  writeU16(view, address + 6, entries.length);
+  let cursor = address + 8;
+
+  entries.forEach((entry) => {
     writeSymbolTableEntry(view, cursor, { nameOffset: entry.nameOffset, objectHeaderAddress: entry.objectHeaderAddress, cacheType: 0 });
     cursor += 40;
   });
