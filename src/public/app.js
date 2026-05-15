@@ -95,7 +95,7 @@ els.resetGardenButton?.addEventListener("click", resetGarden);
 els.clearGardenFormButton?.addEventListener("click", clearGardenSelection);
 els.deleteGardenEntityButton?.addEventListener("click", () => {
   if (state.selectedGardenEntityId) {
-    deleteGardenEntity(state.selectedGardenEntityId);
+    confirmAndDeleteGardenEntity(state.selectedGardenEntityId);
   }
 });
 els.importKmlButton?.addEventListener("click", showKmlUnavailable);
@@ -262,7 +262,25 @@ async function deleteGardenEntity(id) {
   await loadStatus(true);
 }
 
+function confirmAndDeleteGardenEntity(id) {
+  const entity = getGardenEntities(state.status).find((item) => item.id === id);
+  const label = entity?.name || id;
+  const confirmed = window.confirm(`Supprimer l'entité sélectionnée "${label}" ? Cette action retirera l'entité du GardenState.`);
+
+  if (!confirmed) {
+    return;
+  }
+
+  deleteGardenEntity(id);
+}
+
 async function resetGarden() {
+  const confirmed = window.confirm("Réinitialiser le jardin ? Tout le GardenState sera remis à zéro et les entités actuelles seront remplacées par l'état par défaut.");
+
+  if (!confirmed) {
+    return;
+  }
+
   const response = await fetch("/api/garden/reset", {
     method: "POST"
   });

@@ -8,6 +8,7 @@ const METEOFRANCE_RADAR_FALLBACK_MESH = 1000;
 const METEOFRANCE_HDF5_SIGNATURE = [0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a];
 const METEOFRANCE_HDF5_MAX_BYTES = 40 * 1024 * 1024;
 const METEOFRANCE_HDF5_EXPECTED_DIMENSIONS = { width: 3472, height: 3472 };
+const METEOFRANCE_NATIVE_RASTER_MAX_SIZE = 1024;
 const METEOFRANCE_TOKEN_USER_AGENT_FALLBACK = "weather-garden/0.1";
 const METEOFRANCE_REQUIRED_SECRETS = ["METEOFRANCE_API_KEY", "METEOFRANCE_APPLICATION_ID"];
 
@@ -187,7 +188,8 @@ async function buildMeteoFranceRadarResponse({ env, fetchedAt, authMode, radarMe
   const hdf5Diagnostics = productUrl
     ? await inspectMeteoFranceHdf5Product({ env, fetchBinary, productUrl, validityTime: metadata.validity_time || metadata.validityTime, forceRefresh: forceHdf5Refresh })
     : null;
-  const nativeLayer = buildMeteoFranceNativeLayer(hdf5Diagnostics);
+  const nativeLayer = buildMeteoFranceNativeLayer(hdf5Diagnostics, metadata.validity_time || metadata.validityTime);
+  const publicHdf5Diagnostics = sanitizeMeteoFranceHdf5Diagnostics(hdf5Diagnostics);
   const hasPrimaryProduct = !!productUrl;
   const hasFallbackProduct = !!fallbackProductUrl;
   const activeProductUrl = productUrl || fallbackProductUrl;
@@ -216,7 +218,7 @@ async function buildMeteoFranceRadarResponse({ env, fetchedAt, authMode, radarMe
     metadata: {
       mesh500ProductUrl: sanitizePublicUrl(productUrl),
       mesh1000ProductUrl: sanitizePublicUrl(fallbackProductUrl),
-      hdf5: hdf5Diagnostics
+      hdf5: publicHdf5Diagnostics
     },
     diagnostics: {
       configured: true,
@@ -230,7 +232,7 @@ async function buildMeteoFranceRadarResponse({ env, fetchedAt, authMode, radarMe
       productLinkFound: !!activeProductUrl,
       selectedMesh: activeMesh,
       selectedFormat: activeFormat,
-      hdf5: hdf5Diagnostics,
+      hdf5: publicHdf5Diagnostics,
       nativeLayerAvailable: !!nativeLayer?.ok,
       fallbackReason: nativeLayer?.ok ? null : buildMeteoFranceFallbackReason({ hasPrimaryProduct, hasFallbackProduct, hdf5Diagnostics })
     }
@@ -284,7 +286,7 @@ async function downloadAndInspectMeteoFranceHdf5(fetchBinary, productUrl) {
   try {
     response = await fetchBinary(productUrl);
   } catch (error) {
-    return buildHdf5Diagnostics({ downloadOk: false, error: sanitizeMeteoFranceMessage(error.message) });
+    return await buildHdf5Diagnostics({ downloadOk: false, error: sanitizeMeteoFranceMessage(error.message) });
   }
 
   const contentType = response.headers.get("content-type") || "";
@@ -292,7 +294,7 @@ async function downloadAndInspectMeteoFranceHdf5(fetchBinary, productUrl) {
   const httpStatus = response.status;
 
   if (!response.ok) {
-    return buildHdf5Diagnostics({
+    return await buildHdf5Diagnostics({
       downloadOk: false,
       httpStatus,
       contentType,
@@ -302,7 +304,7 @@ async function downloadAndInspectMeteoFranceHdf5(fetchBinary, productUrl) {
   }
 
   if (Number.isFinite(contentLengthHeader) && contentLengthHeader > METEOFRANCE_HDF5_MAX_BYTES) {
-    return buildHdf5Diagnostics({
+    return await buildHdf5Diagnostics({
       downloadOk: false,
       httpStatus,
       contentType,
@@ -315,7 +317,7 @@ async function downloadAndInspectMeteoFranceHdf5(fetchBinary, productUrl) {
   const bytes = new Uint8Array(arrayBuffer);
 
   if (bytes.byteLength > METEOFRANCE_HDF5_MAX_BYTES) {
-    return buildHdf5Diagnostics({
+    return await buildHdf5Diagnostics({
       downloadOk: false,
       httpStatus,
       contentType,
@@ -328,7 +330,8 @@ async function downloadAndInspectMeteoFranceHdf5(fetchBinary, productUrl) {
   const signatureOk = hasHdf5Signature(bytes);
   const structure = signatureOk ? parseMeteoFranceHdf5Structure(bytes) : null;
 
-  return buildHdf5Diagnostics({
+  return await buildHdf5Diagnostics({
+    bytes,
     downloadOk: true,
     httpStatus,
     contentType,
@@ -341,7 +344,8 @@ async function downloadAndInspectMeteoFranceHdf5(fetchBinary, productUrl) {
   });
 }
 
-function buildHdf5Diagnostics({
+async function buildHdf5Diagnostics({
+  bytes = null,
   downloadOk,
   httpStatus = null,
   contentType = "",
@@ -357,9 +361,11 @@ function buildHdf5Diagnostics({
   const projection = extractMeteoFranceProjection(structure);
   const bounds = extractMeteoFranceBounds(structure);
   const dimensions = radarDataset?.dimensions || null;
-  const nativeLayerCriteria = buildMeteoFranceNativeLayerCriteria({ signatureOk, structure, radarDataset, projection, bounds });
-  const canDecodeGrid = nativeLayerCriteria.valuesReadable;
-  const nativeLayerBlocker = buildMeteoFranceNativeLayerBlocker({ radarDataset, projection, bounds, nativeLayerCriteria });
+  const radarAttributes = collectMeteoFranceRadarDatasetAttributes(structure, radarDataset);
+  const rasterDecode = await decodeMeteoFranceNativeRaster({ bytes, signatureOk, structure, radarDataset, radarAttributes, bounds });
+  const nativeLayerCriteria = buildMeteoFranceNativeLayerCriteria({ signatureOk, structure, radarDataset, projection, bounds, rasterDecode });
+  const canDecodeGrid = nativeLayerCriteria.valuesDecoded && nativeLayerCriteria.imageBuilt;
+  const nativeLayerBlocker = buildMeteoFranceNativeLayerBlocker({ radarDataset, projection, bounds, nativeLayerCriteria, rasterDecode });
   const fallbackError = buildMeteoFranceHdf5ParsingError({ signatureOk, structure, radarDataset, projection, bounds, nativeLayerBlocker });
 
   return {
@@ -383,30 +389,76 @@ function buildHdf5Diagnostics({
     dimensions,
     projection,
     bounds,
-    unit: radarDataset ? getHdf5AttributeValue(radarDataset.attributes, ["unit", "units", "unite"]) : null,
-    scaleFactor: radarDataset ? getHdf5AttributeValue(radarDataset.attributes, ["scale_factor", "scale", "factor", "facteur_echelle"]) : null,
-    missingValue: radarDataset ? getHdf5AttributeValue(radarDataset.attributes, ["missing_value", "_fillvalue", "nodata", "no_data", "fill_value"]) : null,
+    quantity: radarDataset ? getHdf5AttributeValue(radarAttributes, ["quantity"]) : null,
+    unit: radarDataset ? getHdf5AttributeValue(radarAttributes, ["unit", "units", "unite"]) : null,
+    scaleFactor: radarDataset ? getHdf5AttributeValue(radarAttributes, ["scale_factor", "scale", "factor", "facteur_echelle", "gain"]) : null,
+    offset: radarDataset ? getHdf5AttributeValue(radarAttributes, ["add_offset", "offset"]) : null,
+    missingValue: radarDataset ? getHdf5AttributeValue(radarAttributes, ["missing_value", "_fillvalue", "nodata", "no_data", "fill_value"]) : null,
+    undetectValue: radarDataset ? getHdf5AttributeValue(radarAttributes, ["undetect", "undetect_value"]) : null,
     nativeLayerCriteria,
     nativeLayerBlocker,
-    error: sanitizeMeteoFranceMessage(error || fallbackError)
+    nativeRaster: rasterDecode?.ok ? rasterDecode.raster : null,
+    nativeLayerImageDataUrl: rasterDecode?.ok ? rasterDecode.imageDataUrl : null,
+    error: error || fallbackError ? sanitizeMeteoFranceMessage(error || fallbackError) : null
   };
 }
 
-function buildMeteoFranceNativeLayer(hdf5Diagnostics) {
+function buildMeteoFranceNativeLayer(hdf5Diagnostics, validityTime = null) {
   if (!hdf5Diagnostics?.signatureOk) {
     return {
       ok: false,
-      reason: hdf5Diagnostics?.error || "Météo-France HDF5 product is not available or not valid."
+      reason: hdf5Diagnostics?.error || "Météo-France HDF5 product is not available or not valid.",
+      frames: []
     };
   }
 
-  return {
-    ok: false,
-    reason: hdf5Diagnostics.nativeLayerBlocker
-      ? `Météo-France HDF5 structure parsed, but native rendering remains disabled: ${hdf5Diagnostics.nativeLayerBlocker}.`
-      : "Météo-France HDF5 product is valid, but no native Leaflet layer can be built yet; RainViewer remains the visual fallback.",
-    frames: []
+  const raster = hdf5Diagnostics.nativeRaster;
+  const imageDataUrl = hdf5Diagnostics.nativeLayerImageDataUrl;
+
+  if (!raster || !imageDataUrl || !hdf5Diagnostics.bounds) {
+    return {
+      ok: false,
+      reason: hdf5Diagnostics.nativeLayerBlocker
+        ? `Météo-France HDF5 structure parsed, but native rendering remains disabled: ${hdf5Diagnostics.nativeLayerBlocker}.`
+        : "Météo-France HDF5 product is valid, but no native Leaflet layer can be built yet; RainViewer remains the visual fallback.",
+      frames: []
+    };
+  }
+
+  const frame = {
+    provider: "meteofrance-radar",
+    imageDataUrl,
+    bounds: hdf5Diagnostics.bounds,
+    width: raster.width,
+    height: raster.height,
+    sourceWidth: raster.sourceWidth,
+    sourceHeight: raster.sourceHeight,
+    validityTime: normalizeIsoDate(validityTime) || null,
+    attribution: "Météo-France"
   };
+
+  return {
+    ok: true,
+    provider: "meteofrance-radar",
+    imageDataUrl,
+    bounds: hdf5Diagnostics.bounds,
+    width: raster.width,
+    height: raster.height,
+    sourceWidth: raster.sourceWidth,
+    sourceHeight: raster.sourceHeight,
+    validityTime: frame.validityTime,
+    attribution: "Météo-France",
+    frames: [frame]
+  };
+}
+
+function sanitizeMeteoFranceHdf5Diagnostics(diagnostics) {
+  if (!diagnostics) {
+    return null;
+  }
+
+  const { nativeLayerImageDataUrl, ...publicDiagnostics } = diagnostics;
+  return publicDiagnostics;
 }
 
 function buildMeteoFranceRadarMessage({ hasPrimaryProduct, hasFallbackProduct, hdf5Diagnostics, nativeLayer }) {
@@ -1064,19 +1116,30 @@ function parseHdf5ObjectHeaderV1(context, address) {
   }
 
   const messageCount = readUInt16(context, address + 2);
-  let cursor = address + 12;
   const result = createEmptyHdf5ObjectHeader(address, version);
 
-  for (let index = 0; index < messageCount; index++) {
+  parseHdf5ObjectHeaderMessages(context, result, address + 16, messageCount);
+  return result;
+}
+
+function parseHdf5ObjectHeaderMessages(context, result, start, messageCount = null, limit = context.bytes.byteLength) {
+  let cursor = start;
+  let index = 0;
+
+  while (cursor + 8 <= limit && (messageCount === null || index < messageCount)) {
     const messageType = readUInt16(context, cursor);
     const messageSize = readUInt16(context, cursor + 2);
     const flags = readUInt8(context, cursor + 4);
+
+    if (messageType === 0 && messageSize === 0) {
+      break;
+    }
+
     const messageData = context.bytes.subarray(cursor + 8, cursor + 8 + messageSize);
     applyHdf5ObjectHeaderMessage(context, result, messageType, messageData, flags);
     cursor = alignTo(cursor + 8 + messageSize, 8);
+    index++;
   }
-
-  return result;
 }
 
 function parseHdf5ObjectHeaderV2(context, address) {
@@ -1124,6 +1187,12 @@ function applyHdf5ObjectHeaderMessage(context, header, messageType, messageData,
 
     if (messageType === 12) {
       header.attributes.push(parseHdf5AttributeMessage(context, messageData));
+      return;
+    }
+
+    if (messageType === 16) {
+      const continuation = parseHdf5ObjectHeaderContinuationMessage(context, messageData);
+      parseHdf5ObjectHeaderMessages(context, header, continuation.address, null, continuation.address + continuation.size);
       return;
     }
 
@@ -1242,8 +1311,7 @@ function parseHdf5DataLayoutMessageV1(context, data, version) {
       layoutClass: "chunked",
       address,
       chunkDimensions,
-      supported: false,
-      reason: "chunk B-tree decoding is not implemented yet"
+      supported: true
     };
   }
 
@@ -1304,8 +1372,7 @@ function parseHdf5DataLayoutMessageV3(context, data, version) {
       address,
       chunkDimensions,
       elementSize,
-      supported: false,
-      reason: "chunk B-tree and filter decoding are not implemented yet"
+      supported: true
     };
   }
 
@@ -1346,8 +1413,10 @@ function parseHdf5FilterPipelineMessage(data) {
       name: name || getHdf5FilterName(id),
       flags,
       clientValues,
-      supported: id === 1 ? false : false,
-      reason: id === 1 ? "deflate decompression is not implemented in this Worker parser" : "filter is not implemented in this Worker parser"
+      supported: id === 1 && isHdf5DeflateSupported(),
+      reason: id === 1
+        ? (isHdf5DeflateSupported() ? null : "deflate decompression is not available in this runtime")
+        : "filter is not implemented in this Worker parser"
     });
   }
 
@@ -1383,6 +1452,13 @@ function parseHdf5SymbolTableMessage(context, data) {
   return {
     btreeAddress: readHdf5Offset(context, 0, data),
     heapAddress: readHdf5Offset(context, context.offsetSize, data)
+  };
+}
+
+function parseHdf5ObjectHeaderContinuationMessage(context, data) {
+  return {
+    address: readHdf5Offset(context, 0, data),
+    size: readHdf5Length(context, context.offsetSize, data)
   };
 }
 
@@ -1475,7 +1551,7 @@ function hasExpectedMeteoFranceRadarDimensions(dataset) {
 
 function extractMeteoFranceProjection(structure) {
   const attributes = collectHdf5Attributes(structure);
-  const projectionAttribute = attributes.find((attribute) => /projection|proj4|proj_def|grid_mapping|lambert|stereographic/i.test(attribute.name));
+  const projectionAttribute = attributes.find((attribute) => /projection|proj4|proj_def|projdef|grid_mapping|lambert|stereographic/i.test(attribute.name));
 
   if (!projectionAttribute) {
     return null;
@@ -1495,11 +1571,21 @@ function extractMeteoFranceBounds(structure) {
   const west = firstFiniteHdf5Attribute(values, ["geospatial_lon_min", "lon_min", "longitude_min", "west", "x_min"]);
   const east = firstFiniteHdf5Attribute(values, ["geospatial_lon_max", "lon_max", "longitude_max", "east", "x_max"]);
 
-  if (![south, north, west, east].every(Number.isFinite)) {
+  if ([south, north, west, east].every(Number.isFinite)) {
+    return [[south, west], [north, east]];
+  }
+
+  const cornerLatitudes = ["ll_lat", "ul_lat", "ur_lat", "lr_lat"].map((name) => Number(values[name]));
+  const cornerLongitudes = ["ll_lon", "ul_lon", "ur_lon", "lr_lon"].map((name) => Number(values[name]));
+
+  if (![...cornerLatitudes, ...cornerLongitudes].every(Number.isFinite)) {
     return null;
   }
 
-  return [[south, west], [north, east]];
+  return [
+    [Math.min(...cornerLatitudes), Math.min(...cornerLongitudes)],
+    [Math.max(...cornerLatitudes), Math.max(...cornerLongitudes)]
+  ];
 }
 
 function collectHdf5Attributes(structure) {
@@ -1510,6 +1596,543 @@ function collectHdf5Attributes(structure) {
   ];
 }
 
+function collectMeteoFranceRadarDatasetAttributes(structure, radarDataset) {
+  if (!radarDataset?.path) {
+    return [];
+  }
+
+  const parentPath = radarDataset.path.replace(/\/[^/]+$/, "");
+  const metadataGroupPath = `${parentPath}/what`;
+  const metadataGroup = (structure?.groups || []).find((group) => group.path === metadataGroupPath);
+
+  return [
+    ...(radarDataset.attributes || []),
+    ...(metadataGroup?.attributes || [])
+  ];
+}
+
+
+async function decodeMeteoFranceNativeRaster({ bytes, signatureOk, structure, radarDataset, radarAttributes, bounds }) {
+  if (!bytes || !signatureOk || !structure?.parsingOk || !radarDataset || !bounds) {
+    return null;
+  }
+
+  if (!isMeteoFranceDatasetReadableForNativeLayer(radarDataset)) {
+    return null;
+  }
+
+  try {
+    const rawGrid = await readHdf5DatasetRawGrid(bytes, structure, radarDataset);
+
+    if (!rawGrid?.bytes) {
+      return {
+        ok: false,
+        reason: rawGrid?.reason || "radar dataset numeric values could not be decoded"
+      };
+    }
+
+    return buildMeteoFranceNativeRasterPng({ rawGrid, radarDataset, radarAttributes });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: sanitizeMeteoFranceMessage(error.message)
+    };
+  }
+}
+
+async function readHdf5DatasetRawGrid(bytes, structure, dataset) {
+  const storage = dataset?.storage;
+  const dimensions = dataset?.dimensions || [];
+  const elementSize = dataset?.dataType?.size || storage?.elementSize || 0;
+  const expectedLength = getHdf5DatasetExpectedByteLength(dataset);
+
+  if (!Number.isFinite(expectedLength) || expectedLength <= 0) {
+    return { ok: false, reason: "radar dataset byte length could not be computed" };
+  }
+
+  if (!elementSize) {
+    return { ok: false, reason: "radar dataset element size is missing" };
+  }
+
+  if (storage?.layoutClass === "contiguous") {
+    const address = storage.address;
+    const length = storage.size || expectedLength;
+
+    if (!Number.isFinite(address) || address < 0 || address + length > bytes.byteLength) {
+      return { ok: false, reason: "contiguous radar dataset points outside the HDF5 file" };
+    }
+
+    if (length < expectedLength) {
+      return { ok: false, reason: "contiguous radar dataset is smaller than expected" };
+    }
+
+    return {
+      ok: true,
+      bytes: bytes.slice(address, address + expectedLength),
+      decodedChunks: 0,
+      storage: "contiguous"
+    };
+  }
+
+  if (storage?.layoutClass !== "chunked") {
+    return { ok: false, reason: `dataset storage layout ${storage?.layoutClass || "unknown"} is not decoded yet` };
+  }
+
+  return readHdf5ChunkedDatasetRawGrid(bytes, structure, dataset, expectedLength, elementSize, dimensions);
+}
+
+async function readHdf5ChunkedDatasetRawGrid(bytes, structure, dataset, expectedLength, elementSize, dimensions) {
+  const storage = dataset.storage;
+  const chunkShape = getHdf5ChunkShape(storage, dimensions, elementSize);
+  const chunks = readHdf5ChunkBtreeEntries({
+    bytes,
+    view: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+    offsetSize: structure.superblock?.offsetSize || 8,
+    lengthSize: structure.superblock?.lengthSize || 8
+  }, storage.address, storage.rank || storage.chunkDimensions?.length || dimensions.length);
+
+  if (!chunks.length) {
+    return { ok: false, reason: "chunk B-tree did not contain readable radar chunks" };
+  }
+
+  const output = new Uint8Array(expectedLength);
+  const [height, width] = dimensions;
+  let decodedChunks = 0;
+
+  for (const chunk of chunks) {
+    const chunkBytes = await readHdf5ChunkPayload(bytes, dataset.filters || [], chunk);
+
+    if (!chunkBytes?.bytes) {
+      return { ok: false, reason: chunkBytes?.reason || "radar chunk could not be decoded" };
+    }
+
+    copyHdf5ChunkToGrid({
+      output,
+      chunkBytes: chunkBytes.bytes,
+      chunk,
+      chunkShape,
+      elementSize,
+      width,
+      height
+    });
+    decodedChunks++;
+  }
+
+  return {
+    ok: true,
+    bytes: output,
+    decodedChunks,
+    storage: "chunked"
+  };
+}
+
+function getHdf5DatasetExpectedByteLength(dataset) {
+  const dimensions = dataset?.dimensions || [];
+  const elementSize = dataset?.dataType?.size || dataset?.storage?.elementSize || 0;
+
+  if (!dimensions.length || !elementSize || !dimensions.every(Number.isFinite)) {
+    return null;
+  }
+
+  return dimensions.reduce((total, dimension) => total * dimension, elementSize);
+}
+
+function getHdf5ChunkShape(storage, dimensions, elementSize) {
+  const chunkDimensions = storage?.chunkDimensions || [];
+
+  if (chunkDimensions.length > dimensions.length) {
+    return chunkDimensions.slice(0, dimensions.length);
+  }
+
+  if (chunkDimensions.length === dimensions.length) {
+    return chunkDimensions;
+  }
+
+  if (chunkDimensions.length && elementSize && chunkDimensions.at(-1) === elementSize) {
+    return chunkDimensions.slice(0, -1);
+  }
+
+  return dimensions;
+}
+
+function readHdf5ChunkBtreeEntries(context, address, rank, visited = new Set()) {
+  if (!Number.isFinite(address) || visited.has(address)) {
+    return [];
+  }
+
+  visited.add(address);
+  assertHdf5Ascii(context, address, "TREE");
+
+  const nodeType = readUInt8(context, address + 4);
+  const nodeLevel = readUInt8(context, address + 5);
+  const entriesUsed = readUInt16(context, address + 6);
+  let cursor = address + 8 + context.offsetSize * 2;
+  const entries = [];
+
+  if (nodeType !== 1) {
+    throw new Error(`Unsupported HDF5 chunk B-tree node type ${nodeType}.`);
+  }
+
+  for (let index = 0; index < entriesUsed; index++) {
+    const key = readHdf5ChunkBtreeKey(context, cursor, rank);
+    cursor += 8 + rank * context.lengthSize;
+    const childAddress = readHdf5Offset(context, cursor);
+    cursor += context.offsetSize;
+
+    if (nodeLevel === 0) {
+      entries.push({
+        address: childAddress,
+        byteLength: key.byteLength,
+        filterMask: key.filterMask,
+        offsets: key.offsets
+      });
+      continue;
+    }
+
+    entries.push(...readHdf5ChunkBtreeEntries(context, childAddress, rank, visited));
+  }
+
+  return entries;
+}
+
+function readHdf5ChunkBtreeKey(context, offset, rank) {
+  const byteLength = readUInt32(context, offset);
+  const filterMask = readUInt32(context, offset + 4);
+  const offsets = [];
+  let cursor = offset + 8;
+
+  for (let index = 0; index < rank; index++) {
+    offsets.push(readHdf5Length(context, cursor));
+    cursor += context.lengthSize;
+  }
+
+  return { byteLength, filterMask, offsets };
+}
+
+async function readHdf5ChunkPayload(bytes, filters, chunk) {
+  if (!Number.isFinite(chunk.address) || !Number.isFinite(chunk.byteLength) || chunk.byteLength <= 0) {
+    return { ok: false, reason: "chunk address or size is missing" };
+  }
+
+  if (chunk.address + chunk.byteLength > bytes.byteLength) {
+    return { ok: false, reason: "chunk points outside the HDF5 file" };
+  }
+
+  let chunkBytes = bytes.slice(chunk.address, chunk.address + chunk.byteLength);
+
+  for (let index = 0; index < filters.length; index++) {
+    const filter = filters[index];
+    const skipped = !!(chunk.filterMask & (1 << index));
+
+    if (skipped) {
+      continue;
+    }
+
+    if (filter.id !== 1) {
+      return { ok: false, reason: `dataset filter ${filter.name || filter.id} is not decoded yet` };
+    }
+
+    chunkBytes = await inflateHdf5DeflateBytes(chunkBytes);
+  }
+
+  return { ok: true, bytes: chunkBytes };
+}
+
+async function inflateHdf5DeflateBytes(bytes) {
+  if (!isHdf5DeflateSupported()) {
+    throw new Error("deflate decompression is not available in this runtime");
+  }
+
+  const stream = new Response(bytes).body.pipeThrough(new DecompressionStream("deflate"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function isHdf5DeflateSupported() {
+  return typeof DecompressionStream === "function";
+}
+
+function copyHdf5ChunkToGrid({ output, chunkBytes, chunk, chunkShape, elementSize, width, height }) {
+  const rowOffset = chunk.offsets[0] || 0;
+  const columnOffset = chunk.offsets[1] || 0;
+  const chunkHeight = chunkShape[0] || height;
+  const chunkWidth = chunkShape[1] || width;
+  const rows = Math.max(0, Math.min(chunkHeight, height - rowOffset));
+  const columns = Math.max(0, Math.min(chunkWidth, width - columnOffset));
+  const sourceRowBytes = chunkWidth * elementSize;
+  const targetRowBytes = width * elementSize;
+
+  for (let row = 0; row < rows; row++) {
+    const sourceStart = row * sourceRowBytes;
+    const sourceEnd = sourceStart + columns * elementSize;
+    const targetStart = ((rowOffset + row) * width + columnOffset) * elementSize;
+
+    if (sourceEnd > chunkBytes.byteLength || targetStart + columns * elementSize > output.byteLength) {
+      break;
+    }
+
+    output.set(chunkBytes.subarray(sourceStart, sourceEnd), targetStart);
+  }
+}
+
+function buildMeteoFranceNativeRasterPng({ rawGrid, radarDataset, radarAttributes }) {
+  const [sourceHeight, sourceWidth] = radarDataset.dimensions || [];
+  const scale = Math.max(1, Math.ceil(Math.max(sourceWidth, sourceHeight) / METEOFRANCE_NATIVE_RASTER_MAX_SIZE));
+  const width = Math.ceil(sourceWidth / scale);
+  const height = Math.ceil(sourceHeight / scale);
+  const rgba = new Uint8Array(width * height * 4);
+  const reader = createHdf5NumericReader(rawGrid.bytes, radarDataset.dataType);
+  const scaleFactor = toFiniteHdf5Scalar(getHdf5AttributeValue(radarAttributes, ["scale_factor", "scale", "factor", "facteur_echelle", "gain"])) ?? 1;
+  const offset = toFiniteHdf5Scalar(getHdf5AttributeValue(radarAttributes, ["add_offset", "offset"])) ?? 0;
+  const missingValue = toFiniteHdf5Scalar(getHdf5AttributeValue(radarAttributes, ["missing_value", "_fillvalue", "nodata", "no_data", "fill_value"]));
+  const undetectValue = toFiniteHdf5Scalar(getHdf5AttributeValue(radarAttributes, ["undetect", "undetect_value"]));
+  let valueCount = 0;
+  let minValue = null;
+  let maxValue = null;
+
+  for (let y = 0; y < height; y++) {
+    const sourceY = Math.min(sourceHeight - 1, Math.floor((y + 0.5) * sourceHeight / height));
+
+    for (let x = 0; x < width; x++) {
+      const sourceX = Math.min(sourceWidth - 1, Math.floor((x + 0.5) * sourceWidth / width));
+      const rawValue = reader(sourceY * sourceWidth + sourceX);
+
+      if (!Number.isFinite(rawValue) || rawValue === missingValue || rawValue === undetectValue) {
+        continue;
+      }
+
+      const value = rawValue * scaleFactor + offset;
+
+      if (!Number.isFinite(value) || value <= 0) {
+        continue;
+      }
+
+      const color = getMeteoFranceRainColor(value);
+      const target = (y * width + x) * 4;
+      rgba[target] = color[0];
+      rgba[target + 1] = color[1];
+      rgba[target + 2] = color[2];
+      rgba[target + 3] = color[3];
+      valueCount++;
+      minValue = minValue === null ? value : Math.min(minValue, value);
+      maxValue = maxValue === null ? value : Math.max(maxValue, value);
+    }
+  }
+
+  const pngBytes = encodePngRgba(width, height, rgba);
+
+  return {
+    ok: true,
+    imageDataUrl: `data:image/png;base64,${bytesToBase64(pngBytes)}`,
+    raster: {
+      width,
+      height,
+      sourceWidth,
+      sourceHeight,
+      downsampleFactor: scale,
+      storage: rawGrid.storage,
+      decodedChunks: rawGrid.decodedChunks,
+      valueCount,
+      minValue,
+      maxValue
+    }
+  };
+}
+
+function createHdf5NumericReader(bytes, dataType) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const size = dataType?.size || 0;
+  const littleEndian = dataType?.byteOrder !== "big-endian";
+  const signed = !!dataType?.signed;
+  const floatingPoint = dataType?.className === "floating-point";
+
+  return (index) => {
+    const offset = index * size;
+
+    if (offset < 0 || offset + size > bytes.byteLength) {
+      return null;
+    }
+
+    if (floatingPoint && size === 4) {
+      return view.getFloat32(offset, littleEndian);
+    }
+
+    if (floatingPoint && size === 8) {
+      return view.getFloat64(offset, littleEndian);
+    }
+
+    if (size === 1) {
+      return signed ? view.getInt8(offset) : view.getUint8(offset);
+    }
+
+    if (size === 2) {
+      return signed ? view.getInt16(offset, littleEndian) : view.getUint16(offset, littleEndian);
+    }
+
+    if (size === 4) {
+      return signed ? view.getInt32(offset, littleEndian) : view.getUint32(offset, littleEndian);
+    }
+
+    return null;
+  };
+}
+
+function getMeteoFranceRainColor(value) {
+  if (value >= 20) {
+    return [106, 62, 132, 190];
+  }
+
+  if (value >= 10) {
+    return [180, 35, 35, 185];
+  }
+
+  if (value >= 5) {
+    return [216, 119, 36, 175];
+  }
+
+  if (value >= 2) {
+    return [227, 169, 55, 165];
+  }
+
+  if (value >= 1) {
+    return [77, 139, 83, 150];
+  }
+
+  if (value >= 0.2) {
+    return [39, 125, 161, 135];
+  }
+
+  return [80, 145, 170, 100];
+}
+
+function encodeAsciiBytes(value) {
+  return Uint8Array.from(String(value).split("").map((char) => char.charCodeAt(0)));
+}
+
+function encodePngRgba(width, height, rgba) {
+  const scanlines = new Uint8Array(height * (1 + width * 4));
+
+  for (let y = 0; y < height; y++) {
+    const scanlineStart = y * (1 + width * 4);
+    const rgbaStart = y * width * 4;
+    scanlines[scanlineStart] = 0;
+    scanlines.set(rgba.subarray(rgbaStart, rgbaStart + width * 4), scanlineStart + 1);
+  }
+
+  return concatUint8Arrays([
+    Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    buildPngChunk("IHDR", buildPngIhdr(width, height)),
+    buildPngChunk("IDAT", buildZlibStoredBlocks(scanlines)),
+    buildPngChunk("IEND", new Uint8Array(0))
+  ]);
+}
+
+function buildPngIhdr(width, height) {
+  const bytes = new Uint8Array(13);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(0, width, false);
+  view.setUint32(4, height, false);
+  bytes[8] = 8;
+  bytes[9] = 6;
+  return bytes;
+}
+
+function buildPngChunk(type, data) {
+  const typeBytes = encodeAsciiBytes(type);
+  const bytes = new Uint8Array(12 + data.length);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(0, data.length, false);
+  bytes.set(typeBytes, 4);
+  bytes.set(data, 8);
+  view.setUint32(8 + data.length, crc32(concatUint8Arrays([typeBytes, data])), false);
+  return bytes;
+}
+
+function buildZlibStoredBlocks(data) {
+  const blocks = [];
+  let offset = 0;
+
+  blocks.push(Uint8Array.from([0x78, 0x01]));
+
+  while (offset < data.length) {
+    const length = Math.min(65535, data.length - offset);
+    const block = new Uint8Array(5 + length);
+    const finalBlock = offset + length >= data.length;
+    block[0] = finalBlock ? 1 : 0;
+    block[1] = length & 0xff;
+    block[2] = (length >> 8) & 0xff;
+    const inverse = (~length) & 0xffff;
+    block[3] = inverse & 0xff;
+    block[4] = (inverse >> 8) & 0xff;
+    block.set(data.subarray(offset, offset + length), 5);
+    blocks.push(block);
+    offset += length;
+  }
+
+  const checksum = new Uint8Array(4);
+  new DataView(checksum.buffer).setUint32(0, adler32(data), false);
+  blocks.push(checksum);
+  return concatUint8Arrays(blocks);
+}
+
+function concatUint8Arrays(arrays) {
+  const totalLength = arrays.reduce((total, array) => total + array.length, 0);
+  const bytes = new Uint8Array(totalLength);
+  let offset = 0;
+
+  for (const array of arrays) {
+    bytes.set(array, offset);
+    offset += array.length;
+  }
+
+  return bytes;
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+
+  for (const byte of bytes) {
+    crc ^= byte;
+
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function adler32(bytes) {
+  let a = 1;
+  let b = 0;
+
+  for (const byte of bytes) {
+    a = (a + byte) % 65521;
+    b = (b + a) % 65521;
+  }
+
+  return ((b << 16) | a) >>> 0;
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+
+  return btoa(binary);
+}
+
+function toFiniteHdf5Scalar(value) {
+  if (Array.isArray(value)) {
+    return toFiniteHdf5Scalar(value[0]);
+  }
+
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function isMeteoFranceDatasetReadableForNativeLayer(dataset) {
   if (!dataset?.storage?.supported) {
     return false;
@@ -1518,16 +2141,18 @@ function isMeteoFranceDatasetReadableForNativeLayer(dataset) {
   return !(dataset.filters || []).some((filter) => !filter.supported);
 }
 
-function buildMeteoFranceNativeLayerCriteria({ signatureOk, structure, radarDataset, projection, bounds }) {
+function buildMeteoFranceNativeLayerCriteria({ signatureOk, structure, radarDataset, projection, bounds, rasterDecode }) {
   const dimensions = radarDataset?.dimensions || [];
   const dimensionsKnown = Array.isArray(dimensions) && dimensions.length >= 2 && dimensions.every(Number.isFinite);
   const expectedDimensionsMatch = dimensionsKnown && hasExpectedMeteoFranceRadarDimensions(radarDataset);
-  const valuesReadable = !!radarDataset
+  const valuesDecodeEligible = !!radarDataset
     && dimensionsKnown
     && expectedDimensionsMatch
     && !!projection
     && !!bounds
     && isMeteoFranceDatasetReadableForNativeLayer(radarDataset);
+  const valuesDecoded = valuesDecodeEligible && !!rasterDecode?.ok;
+  const valuesReadable = valuesDecoded;
 
   return {
     signatureOk: !!signatureOk,
@@ -1539,12 +2164,12 @@ function buildMeteoFranceNativeLayerCriteria({ signatureOk, structure, radarData
     projectionFound: !!projection,
     boundsFound: !!bounds,
     valuesReadable,
-    valuesDecoded: false,
-    imageBuilt: false
+    valuesDecoded,
+    imageBuilt: valuesDecoded && !!rasterDecode?.imageDataUrl
   };
 }
 
-function buildMeteoFranceNativeLayerBlocker({ radarDataset, projection, bounds, nativeLayerCriteria }) {
+function buildMeteoFranceNativeLayerBlocker({ radarDataset, projection, bounds, nativeLayerCriteria, rasterDecode }) {
   if (!radarDataset) {
     return "no usable radar accumulation dataset was identified in the HDF5 structure";
   }
@@ -1575,7 +2200,11 @@ function buildMeteoFranceNativeLayerBlocker({ radarDataset, projection, bounds, 
     return unsupportedFilter.reason || `dataset filter ${unsupportedFilter.name || unsupportedFilter.id} is not decoded yet`;
   }
 
-  return "native raster value decoding and image generation are not implemented yet";
+  if (!rasterDecode?.ok) {
+    return rasterDecode?.reason || "native raster value decoding and image generation failed";
+  }
+
+  return null;
 }
 
 function buildMeteoFranceHdf5ParsingError({ signatureOk, structure, radarDataset, projection, bounds, nativeLayerBlocker }) {

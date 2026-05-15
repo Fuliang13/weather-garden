@@ -164,6 +164,7 @@ describe("Meteo-France radar source", () => {
     expect(radar.diagnostics.hdf5.datasets.map((dataset) => dataset.name)).toEqual(["data1", "quality1"]);
     expect(radar.diagnostics.hdf5.radarDataset.name).toBe("data1");
     expect(radar.diagnostics.hdf5.quality.name).toBe("quality1");
+    expect(radar.diagnostics.hdf5.quality.attributes).toMatchObject([{ name: "units", value: "percent" }]);
     expect(radar.diagnostics.hdf5.projection).toMatchObject({ value: "EPSG:2154" });
     expect(radar.diagnostics.hdf5.bounds).toEqual([[48.1, -1.5], [48.9, -0.7]]);
     expect(JSON.stringify(radar)).not.toContain("api-key-token");
@@ -513,6 +514,7 @@ function buildMinimalHdf5Fixture() {
   const dataHeaderAddress = 1024;
   const symbolTableNodeAddress = 2200;
   const qualityHeaderAddress = 3000;
+  const qualityContinuationAddress = 5000;
 
   writeBytes(bytes, 0, [0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a]);
   bytes[8] = 0;
@@ -562,6 +564,7 @@ function buildMinimalHdf5Fixture() {
     dimensions: [3472, 3472],
     typeSize: 1,
     chunkDimensions: [512, 512],
+    continuationAddress: qualityContinuationAddress,
     attributes: [
       stringAttribute("units", "percent")
     ]
@@ -570,14 +573,20 @@ function buildMinimalHdf5Fixture() {
   return bytes;
 }
 
-function writeDatasetHeader(bytes, view, address, { dimensions, typeSize, chunkDimensions, attributes }) {
+function writeDatasetHeader(bytes, view, address, { dimensions, typeSize, chunkDimensions, attributes, continuationAddress = null }) {
+  const attributeMessages = attributes.map((attribute) => ({ type: 12, data: attribute }));
+
   writeObjectHeader(bytes, view, address, [
     { type: 1, data: buildDataspaceMessage(dimensions) },
     { type: 3, data: buildFixedPointDatatypeMessage(typeSize) },
     { type: 8, data: buildChunkedLayoutMessage(chunkDimensions, typeSize) },
     { type: 11, data: buildDeflateFilterMessage() },
-    ...attributes.map((attribute) => ({ type: 12, data: attribute }))
+    ...(continuationAddress ? [{ type: 16, data: buildContinuationMessage(continuationAddress, getObjectHeaderMessagesSize(attributeMessages)) }] : attributeMessages)
   ]);
+
+  if (continuationAddress) {
+    writeObjectHeaderMessages(bytes, view, continuationAddress, attributeMessages);
+  }
 }
 
 function buildDataspaceMessage(dimensions) {
@@ -687,24 +696,36 @@ function buildSymbolTableMessage(btreeAddress, heapAddress) {
   return bytes;
 }
 
+function buildContinuationMessage(address, size) {
+  const bytes = new Uint8Array(16);
+  const view = new DataView(bytes.buffer);
+  writeU64(view, 0, address);
+  writeU64(view, 8, size);
+  return bytes;
+}
+
 function writeObjectHeader(bytes, view, address, messages) {
-  let headerSize = 0;
-  messages.forEach((message) => {
-    headerSize += 8 + align8(message.data.length);
-  });
+  const headerSize = getObjectHeaderMessagesSize(messages);
 
   bytes[address] = 1;
   writeU16(view, address + 2, messages.length);
   writeU32(view, address + 4, 1);
   writeU32(view, address + 8, headerSize);
-  let cursor = address + 12;
+  writeObjectHeaderMessages(bytes, view, address + 16, messages);
+}
 
+function writeObjectHeaderMessages(bytes, view, address, messages) {
+  let cursor = address;
   messages.forEach((message) => {
     writeU16(view, cursor, message.type);
     writeU16(view, cursor + 2, message.data.length);
     writeBytes(bytes, cursor + 8, message.data);
     cursor = align8(cursor + 8 + message.data.length);
   });
+}
+
+function getObjectHeaderMessagesSize(messages) {
+  return messages.reduce((total, message) => total + 8 + align8(message.data.length), 0);
 }
 
 function writeLocalHeap(bytes, view, address, dataSegmentSize, dataSegmentAddress) {

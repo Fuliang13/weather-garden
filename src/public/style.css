@@ -664,6 +664,16 @@ button.secondary,
   border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
 }
 
+@media (max-width: 1023px) {
+  .garden-actions {
+    justify-content: flex-start;
+  }
+
+  .garden-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
 .garden-alerts-list span {
   color: var(--muted);
   font-size: 0.9rem;
@@ -740,14 +750,6 @@ button.secondary,
   .radar-legend {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .garden-actions {
-    justify-content: flex-start;
-  }
-
-  .garden-workspace {
-    grid-template-columns: 1fr;
   }
 
   .radar-map {
