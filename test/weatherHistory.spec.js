@@ -60,8 +60,13 @@ describe("weather history", () => {
     });
     expect(sample.rainHorizons).toHaveLength(2);
     expect(sample.wgfSummary.horizons[0]).toMatchObject({ key: "1h", confidence: "high" });
+    expect(sample.errors[0].message).toBe("<redacted-url>");
+    expect(serialized).not.toContain("https://");
+    expect(serialized).not.toContain("api.ecowitt.net");
     expect(serialized).not.toContain("application_key");
     expect(serialized).not.toContain("api_key");
+    expect(serialized).not.toContain("mac=");
+    expect(serialized).not.toContain("imei=");
     expect(serialized).not.toContain("secret-token");
     expect(serialized).not.toContain("rainviewer-token");
     expect(serialized).not.toContain("AA:BB:CC:DD:EE:FF");
@@ -301,6 +306,7 @@ describe("weather history", () => {
       diagnostics: { kvReadable: true }
     });
     expect(serialized).not.toContain("weather-history-sample");
+    expect(serialized).not.toContain("https://");
     expect(serialized).not.toContain("application_key");
     expect(serialized).not.toContain("api_key");
     expect(serialized).not.toContain("secret-token");

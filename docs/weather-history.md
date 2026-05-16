@@ -148,3 +148,9 @@ Réponse type :
 - Pas d’affichage frontend.
 - Pas d’export des samples.
 - Pas de compteur persistant des skips récents : `lastSampleTooRecentSkips` reste à `0` tant qu’aucun stockage de métrique dédiée n’est ajouté.
+
+## Correctif Patch 2A — sanitation URL
+
+Le diagnostic historique et les samples continuent de ne pas retourner de payload brut. Les messages d’erreur nettoyés masquent désormais les URLs complètes sous la forme `<redacted-url>`, afin d’éviter de conserver ou d’exposer une URL signée, un token encodé dans le chemin, un hôte de requête sensible ou les noms de paramètres d’authentification.
+
+Les nouveaux fichiers du socle historique sont normalisés en LF, avec une règle Git dédiée pour éviter le retour de CRLF dans les prochains patchs.

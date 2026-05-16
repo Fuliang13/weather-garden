@@ -4,6 +4,15 @@ Ce fichier doit être mis à jour à chaque patch livré.
 
 ## Non publié
 
+### Correctif socle historique météo
+
+- Correction de la sanitation des messages d’erreur historisés : les URLs complètes sont désormais remplacées par `<redacted-url>`, au lieu de conserver les noms de paramètres sensibles comme `application_key` ou `api_key`.
+- Renforcement des tests de non-exposition : URLs, noms de paramètres secrets, MAC, IMEI et tokens ne doivent pas apparaître dans les samples ni dans le diagnostic historique.
+- Normalisation en LF des fichiers récents du socle historique.
+- Ajout de `.gitattributes` pour stabiliser les fins de ligne des prochains patchs.
+- Ajustement des tests KML pour rester exécutables dans le contexte exporté ChatGPT, sans dépendre de fixtures `.kml` exclues du zip.
+- Aucun impact UI, aucun changement de stockage KV, aucun changement sur `/api/status` ou `/api/refresh`.
+
 ### Diagnostic historique météo
 
 - Ajout de l’endpoint `GET /api/debug/weather-history`.

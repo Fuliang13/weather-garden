@@ -1,0 +1,5 @@
+src/weatherHistory.js text eol=lf
+test/weatherHistory.spec.js text eol=lf
+test/kml.spec.js text eol=lf
+docs/weather-history.md text eol=lf
+whatsnew.md text eol=lf

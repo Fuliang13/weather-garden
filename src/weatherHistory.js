@@ -571,10 +571,10 @@ function sanitizeText(value) {
   }
 
   return String(value)
-    .replace(/apikey=[^&\s]+/gi, "apikey=<redacted>")
-    .replace(/api_key=[^&\s]+/gi, "api_key=<redacted>")
-    .replace(/application_key=[^&\s]+/gi, "application_key=<redacted>")
-    .replace(/authorization:\s*bearer\s+[^\s]+/gi, "authorization: bearer <redacted>")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, "<redacted-url>")
+    .replace(/\bauthorization\s*:\s*bearer\s+[^\s]+/gi, "<redacted-secret>")
+    .replace(/\b(?:application[_-]?key|api[_-]?key|apikey|access[_-]?token|tokenOauth2|token)\b\s*[:=]\s*[^&\s]+/gi, "<redacted-secret>")
+    .replace(/\b(?:application[_-]?key|api[_-]?key|apikey|access[_-]?token|tokenOauth2|authorization)\b/gi, "<redacted-secret-name>")
     .replace(/\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b/gi, "<redacted-mac>")
     .replace(/\b\d{15}\b/g, "<redacted-imei>");
 }
