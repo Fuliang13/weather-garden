@@ -1,3 +1,5 @@
+import { normalizeRadarSequence } from "../radarModel.js";
+
 const RAINVIEWER_URL = "https://api.rainviewer.com/public/weather-maps.json";
 const METEOFRANCE_TOKEN_URL = "https://portail-api.meteofrance.fr/token";
 const METEOFRANCE_RADAR_CATALOG_URL = "https://public-api.meteofrance.fr/public/DPRadar/v1/mosaiques";
@@ -140,13 +142,16 @@ export async function debugMeteoFranceHdf5({ env }) {
 }
 
 export async function fetchRainViewerRadar({ latitude, longitude, enabled = true }) {
+  const fetchedAt = new Date().toISOString();
+
   if (!enabled) {
     return {
       ok: false,
       enabled: false,
       source: "rainviewer",
-      fetchedAt: new Date().toISOString(),
-      message: "RainViewer fallback disabled."
+      fetchedAt,
+      message: "RainViewer fallback disabled.",
+      wgr: normalizeRainViewerRadarSequence({ fetchedAt, ok: false, frames: [] })
     };
   }
 
@@ -174,13 +179,35 @@ export async function fetchRainViewerRadar({ latitude, longitude, enabled = true
     ok: !!imageUrl,
     enabled: true,
     source: "rainviewer",
-    fetchedAt: new Date().toISOString(),
+    fetchedAt,
     generatedAt: data.generated ? new Date(data.generated * 1000).toISOString() : null,
     frameTime: latestFrame?.time ? new Date(latestFrame.time * 1000).toISOString() : null,
     imageUrl,
     tileUrlTemplate,
-    frames: frames.slice(-6)
+    frames: frames.slice(-6),
+    wgr: normalizeRainViewerRadarSequence({
+      fetchedAt,
+      generatedAt: data.generated ? new Date(data.generated * 1000).toISOString() : null,
+      frames: frames.slice(-6),
+      ok: !!imageUrl
+    })
   };
+}
+
+export function normalizeRainViewerRadarSequence({ fetchedAt, generatedAt = null, frames = [], ok = false } = {}) {
+  return normalizeRadarSequence({
+    source: "rainviewer",
+    fetchedAt,
+    ok,
+    frames: frames.map((frame) => ({
+      source: "rainviewer",
+      timestamp: frame?.time ? new Date(frame.time * 1000).toISOString() : generatedAt,
+      fetchedAt,
+      quality: { ok: true },
+      origin: "rainviewer",
+      derivedFrom: ["rainviewer.radar.past"]
+    }))
+  }, { fetchedAt });
 }
 
 async function buildMeteoFranceRadarResponse({ env, fetchedAt, authMode, radarMetadata, fetchBinary, forceHdf5Refresh = false }) {
@@ -190,6 +217,14 @@ async function buildMeteoFranceRadarResponse({ env, fetchedAt, authMode, radarMe
     : null;
   const nativeLayer = buildMeteoFranceNativeLayer(hdf5Diagnostics, metadata.validity_time || metadata.validityTime);
   const publicHdf5Diagnostics = sanitizeMeteoFranceHdf5Diagnostics(hdf5Diagnostics);
+  const wgr = normalizeMeteoFranceRadarSequence({
+    fetchedAt,
+    validityTime: metadata.validity_time || metadata.validityTime,
+    nativeLayer,
+    hdf5Diagnostics,
+    fallbackReason: nativeLayer?.ok ? null : buildMeteoFranceFallbackReason({ hasPrimaryProduct: !!productUrl, hasFallbackProduct: !!fallbackProductUrl, hdf5Diagnostics }),
+    ok: !!nativeLayer?.ok
+  });
   const hasPrimaryProduct = !!productUrl;
   const hasFallbackProduct = !!fallbackProductUrl;
   const activeProductUrl = productUrl || fallbackProductUrl;
@@ -214,6 +249,7 @@ async function buildMeteoFranceRadarResponse({ env, fetchedAt, authMode, radarMe
     nativeLayer,
     frameLimit: METEOFRANCE_RADAR_FRAME_LIMIT,
     frames: nativeLayer?.ok ? nativeLayer.frames : [],
+    wgr,
     message: buildMeteoFranceRadarMessage({ hasPrimaryProduct, hasFallbackProduct, hdf5Diagnostics, nativeLayer }),
     metadata: {
       mesh500ProductUrl: sanitizePublicUrl(productUrl),
@@ -237,6 +273,69 @@ async function buildMeteoFranceRadarResponse({ env, fetchedAt, authMode, radarMe
       fallbackReason: nativeLayer?.ok ? null : buildMeteoFranceFallbackReason({ hasPrimaryProduct, hasFallbackProduct, hdf5Diagnostics })
     }
   };
+}
+
+export function normalizeMeteoFranceRadarSequence({
+  fetchedAt,
+  validityTime = null,
+  nativeLayer = null,
+  hdf5Diagnostics = null,
+  fallbackReason = null,
+  ok = false,
+  now = undefined
+} = {}) {
+  const projection = normalizeMeteoFranceProjection(hdf5Diagnostics?.projection);
+  const bounds = hdf5Diagnostics?.bounds || nativeLayer?.bounds || null;
+  const raster = hdf5Diagnostics?.nativeRaster || null;
+  const frames = nativeLayer?.ok
+    ? (nativeLayer.frames || []).map((frame) => ({
+      source: "meteofrance-radar",
+      timestamp: frame.validityTime || validityTime,
+      fetchedAt,
+      bounds: frame.bounds || bounds,
+      projection,
+      resolutionMeters: METEOFRANCE_RADAR_PRIMARY_MESH,
+      quality: {
+        ok: true,
+        coverage: Number.isFinite(raster?.valueCount) && Number.isFinite(raster?.totalCellCount)
+          ? raster.valueCount / Math.max(1, raster.totalCellCount)
+          : null
+      },
+      origin: "meteofrance-radar",
+      derivedFrom: ["meteofrance.nativeLayer"]
+    }))
+    : [];
+
+  return normalizeRadarSequence({
+    source: "meteofrance-radar",
+    fetchedAt,
+    ok,
+    status: {
+      source: "meteofrance-radar",
+      ok,
+      fetchedAt,
+      latestFrameAt: frames[frames.length - 1]?.timestamp || validityTime,
+      fallbackReason,
+      quality: {
+        ok,
+        reason: ok ? null : fallbackReason
+      },
+      derivedFrom: ["meteofrance.diagnostics.hdf5"]
+    },
+    frames
+  }, { fetchedAt, now });
+}
+
+function normalizeMeteoFranceProjection(projection) {
+  if (!projection) {
+    return null;
+  }
+
+  if (typeof projection === "string") {
+    return projection;
+  }
+
+  return projection.value || projection.name || null;
 }
 
 async function fetchMeteoFranceRadarMetadata(fetchJson) {
@@ -520,6 +619,11 @@ function buildMeteoFranceMissingConfigResponse(fetchedAt, includeDebugDiagnostic
     source: "meteofrance-radar",
     fetchedAt,
     message: "METEOFRANCE_API_KEY or METEOFRANCE_APPLICATION_ID is not configured yet.",
+    wgr: normalizeMeteoFranceRadarSequence({
+      fetchedAt,
+      ok: false,
+      fallbackReason: "Météo-France credentials are not configured."
+    }),
     diagnostics: {
       configured: false,
       authMode: null,
@@ -1567,7 +1671,6 @@ function parseHdf5DataLayoutMessageV3(context, data, version) {
 
   if (layoutClass === 0) {
     const size = readUInt16FromBytes(data, cursor);
-    cursor += 2;
     return {
       version,
       layoutClass: "compact",
@@ -2119,7 +2222,6 @@ function copyHdf5ChunkToGrid({ output, chunkBytes, chunk, chunkShape, elementSiz
   const rows = Math.max(0, Math.min(chunkHeight, height - rowOffset));
   const columns = Math.max(0, Math.min(chunkWidth, width - columnOffset));
   const sourceRowBytes = chunkWidth * elementSize;
-  const targetRowBytes = width * elementSize;
 
   for (let row = 0; row < rows; row++) {
     const sourceStart = row * sourceRowBytes;

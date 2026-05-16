@@ -309,7 +309,7 @@ els.radarAttribution?.addEventListener("click", toggleRadarLayerPanel);
 els.radarLayersButton?.addEventListener("click", toggleRadarLayerPanel);
 els.radarSourceSelect?.addEventListener("change", () => {
   state.radarSourceMode = normalizeRadarSourceMode(els.radarSourceSelect.value);
-  renderRadar(state.status?.radar, state.status?.location, state.status?.rain || {});
+  renderRadar(state.status?.radar, state.status?.location, state.status?.rain || {}, state.status?.wgr);
 });
 els.radarBaseLayerSelect?.addEventListener("change", () => {
   state.radarBaseLayerKey = normalizeMapBaseLayerKey(els.radarBaseLayerSelect.value);
@@ -321,14 +321,14 @@ els.radarRadiusZoomInButton?.addEventListener("click", () => stepRadarRadius(-1)
 els.radarRadiusZoomOutButton?.addEventListener("click", () => stepRadarRadius(1));
 els.radarModeSelect?.addEventListener("change", () => {
   state.radarZoomMode = els.radarModeSelect.value === "manual" ? "manual" : "auto";
-  renderRadar(state.status?.radar, state.status?.location, state.status?.rain || {});
+  renderRadar(state.status?.radar, state.status?.location, state.status?.rain || {}, state.status?.wgr);
 });
 els.radarZoomToggleButton?.addEventListener("click", () => {
   state.radarZoomMode = state.radarZoomMode === "auto" ? "manual" : "auto";
   if (els.radarModeSelect) {
     els.radarModeSelect.value = state.radarZoomMode;
   }
-  renderRadar(state.status?.radar, state.status?.location, state.status?.rain || {});
+  renderRadar(state.status?.radar, state.status?.location, state.status?.rain || {}, state.status?.wgr);
 });
 document.querySelectorAll("[data-garden-action]").forEach((button) => {
   button.addEventListener("click", handleGardenAction);
@@ -673,7 +673,7 @@ function renderStatus(status) {
   renderGarden(rain.garden, status.garden);
   renderGardenWorkspace(getGardenEntities(status), status.location);
   renderGardenAlerts(status.garden?.alerts);
-  renderRadar(status.radar, status.location, rain);
+  renderRadar(status.radar, status.location, rain, status.wgr);
   renderSources(status.sources || []);
   renderSettings(status.settings || {});
   renderDebugLinks();
@@ -2866,8 +2866,8 @@ function renderGardenAlerts(alerts) {
   });
 }
 
-function renderRadar(radar, location, rain = {}) {
-  const model = buildRadarDisplayModel(radar, rain);
+function renderRadar(radar, location, rain = {}, wgr = null) {
+  const model = buildRadarDisplayModel(radar, rain, wgr);
   state.radarDisplayModel = model;
 
   els.radarStatus.textContent = buildRadarStatusText(model, radar);
@@ -2887,6 +2887,10 @@ function renderRadar(radar, location, rain = {}) {
 
 function buildRadarStatusText(model, radar) {
   const validity = model.validityTime ? ` · ${formatDate(model.validityTime)}` : "";
+
+  if (model.wgr?.headline) {
+    return `${model.wgr.headline}${validity ? ` ${validity}` : ""}`;
+  }
 
   if (model.nativeLayer) {
     return `Radar Météo-France natif affiché${validity}.`;
@@ -2913,7 +2917,7 @@ function buildRadarStatusText(model, radar) {
   return uiText("@{%Aucun radar disponible pour le moment.%}");
 }
 
-function buildRadarDisplayModel(radar, rain) {
+function buildRadarDisplayModel(radar, rain, wgr = null) {
   const rainViewer = radar?.rainViewer;
   const meteoFrance = radar?.meteoFrance;
   const availableNativeLayer = meteoFrance?.nativeLayer?.ok ? meteoFrance.nativeLayer : null;
@@ -2926,10 +2930,11 @@ function buildRadarDisplayModel(radar, rain) {
   const selectedSource = nativeLayer ? "meteofrance" : rainViewerTileUrl ? "rainviewer" : sourceMode === "rainviewer" ? "rainviewer" : "meteofrance";
   const sourceStatus = selectedSource === "rainviewer" ? findSourceStatus("rainviewer") : findSourceStatus("meteofrance-radar");
   const nearestRainDistanceKm = getNearestRainDistanceKm(radar, rain);
-  const targetRadiusKm = getRadarTargetRadiusKm(nearestRainDistanceKm, rain);
+  const targetRadiusKm = getRadarTargetRadiusKm(nearestRainDistanceKm, rain, wgr);
   const radiusKm = getSmoothedRadarRadiusKm(targetRadiusKm);
 
   return {
+    wgr,
     nativeLayer,
     rainViewerTileUrl,
     sourceKey: selectedSource,
@@ -2961,7 +2966,7 @@ function renderRadarMetadata(model) {
   }
 
   els.radarZoomStatus.textContent = state.radarZoomMode === "auto" ? "Zoom automatique activé" : "Zoom manuel";
-  els.radarZoomMessage.textContent = state.radarZoomMode === "auto" ? autoMessage : `${radiusLabel} · utilisez + / - pour changer le rayon.`;
+  els.radarZoomMessage.textContent = state.radarZoomMode === "auto" ? getWgrRadarMessage(model.wgr) || autoMessage : `${radiusLabel} · utilisez + / - pour changer le rayon.`;
   els.radarZoomToggleButton.textContent = state.radarZoomMode === "auto" ? "Désactiver" : "Réactiver";
   els.radarModeSelect.value = state.radarZoomMode;
   if (els.radarSourceSelect) {
@@ -3035,7 +3040,11 @@ function getNearestRainDistanceKm(radar, rain) {
   return candidates.find((value) => Number.isFinite(value)) ?? null;
 }
 
-function getRadarTargetRadiusKm(nearestRainDistanceKm, rain) {
+function getRadarTargetRadiusKm(nearestRainDistanceKm, rain, wgr = null) {
+  if (Number.isFinite(wgr?.displayHints?.radiusKm)) {
+    return clampRadarRadius(wgr.displayHints.radiusKm);
+  }
+
   if (Number.isFinite(nearestRainDistanceKm)) {
     if (nearestRainDistanceKm <= 20) {
       return 40;
@@ -3077,6 +3086,38 @@ function getRadarTargetRadiusKm(nearestRainDistanceKm, rain) {
   }
 
   return 160;
+}
+
+function clampRadarRadius(radiusKm) {
+  return Math.max(40, Math.min(160, radiusKm));
+}
+
+function getWgrRadarMessage(wgr) {
+  if (!wgr) {
+    return "";
+  }
+
+  if (wgr.headline && wgr.confidence?.label) {
+    return `${wgr.headline} Confiance ${formatWgrConfidenceLabel(wgr.confidence.label)}.`;
+  }
+
+  return wgr.headline || wgr.explanations?.[0] || "";
+}
+
+function formatWgrConfidenceLabel(label) {
+  if (label === "high") {
+    return "haute";
+  }
+
+  if (label === "medium") {
+    return "moyenne";
+  }
+
+  if (label === "low") {
+    return "faible";
+  }
+
+  return "indisponible";
 }
 
 function getSmoothedRadarRadiusKm(targetRadiusKm) {
@@ -3255,7 +3296,7 @@ function updateRadarRadiusButtons(radiusKm) {
 function setRadarManualRadius(radiusKm) {
   state.radarZoomMode = "manual";
   state.radarRadiusKm = radiusKm;
-  renderRadar(state.status?.radar, state.status?.location, state.status?.rain || {});
+  renderRadar(state.status?.radar, state.status?.location, state.status?.rain || {}, state.status?.wgr);
 
   const center = getRadarMapCenter(state.status?.location);
   if (center && state.radarMap) {

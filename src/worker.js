@@ -69,6 +69,7 @@ export default {
           ok: true,
           updatedAt: status.updatedAt,
           rain: status.rain,
+          wgr: status.wgr,
           stationObservation: status.stationObservation,
           sources: status.sources
         });
@@ -194,7 +195,7 @@ export default {
     }
   },
 
-  async scheduled(event, env, ctx) {
+  async scheduled(_event, env) {
     try {
       await runScheduledCheck(env);
     } catch (error) {

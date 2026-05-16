@@ -1,3 +1,5 @@
+import { buildWgrSynthesis } from "./radarSynthesis.js";
+
 export const DEFAULT_LOCATION = {
   name: "Louvigné-du-Désert",
   latitude: 48.47585833333334,
@@ -118,6 +120,35 @@ export function buildWeatherStatus({
     horizonResults,
     settings: safeSettings
   });
+  const rainStatus = {
+    etaMinutes: rainSignal.etaMinutes,
+    activeNow: rainSignal.activeNow,
+    noSignificantRain: rainSignal.noSignificantRain,
+    noRainWindowMinutes: rainSignal.noRainWindowMinutes,
+    intensityLevel: rainSignal.intensityLevel,
+    intensityLabel: rainSignal.intensityLabel,
+    intensityMmPerHour: rainSignal.intensityMmPerHour,
+    expectedDurationMinutes: rainSignal.expectedDurationMinutes,
+    observation: rainSignal.observation,
+    presentationLevel: rainSignal.activeNow ? rainSignal.intensityLevel : alertLevel,
+    alertLevel,
+    alertLabel: ALERT_LABELS[alertLevel],
+    riskLabel: ALERT_LABELS[alertLevel],
+    headline: buildRainHeadline(rainSignal, alertLevel),
+    detail: buildRainDetail(rainSignal, alertHorizon, safeSettings),
+    shouldAlert: shouldSendRainAlert(safeSettings, rainSignal, alertLevel, alertHorizon),
+    horizons: horizonResults,
+    garden: rainGardenAdvice
+  };
+  const wgr = buildWgrSynthesis({
+    meteoFranceRadar,
+    rainViewer,
+    openMeteo,
+    metNorway,
+    ecowittObservation,
+    rain: rainStatus,
+    now
+  });
 
   return {
     location,
@@ -129,30 +160,12 @@ export function buildWeatherStatus({
       station: ecowittObservation?.ok ? ecowittObservation : null
     },
     garden: garden || null,
-    rain: {
-      etaMinutes: rainSignal.etaMinutes,
-      activeNow: rainSignal.activeNow,
-      noSignificantRain: rainSignal.noSignificantRain,
-      noRainWindowMinutes: rainSignal.noRainWindowMinutes,
-      intensityLevel: rainSignal.intensityLevel,
-      intensityLabel: rainSignal.intensityLabel,
-      intensityMmPerHour: rainSignal.intensityMmPerHour,
-      expectedDurationMinutes: rainSignal.expectedDurationMinutes,
-      observation: rainSignal.observation,
-      presentationLevel: rainSignal.activeNow ? rainSignal.intensityLevel : alertLevel,
-      alertLevel,
-      alertLabel: ALERT_LABELS[alertLevel],
-      riskLabel: ALERT_LABELS[alertLevel],
-      headline: buildRainHeadline(rainSignal, alertLevel),
-      detail: buildRainDetail(rainSignal, alertHorizon, safeSettings),
-      shouldAlert: shouldSendRainAlert(safeSettings, rainSignal, alertLevel, alertHorizon),
-      horizons: horizonResults,
-      garden: rainGardenAdvice
-    },
+    rain: rainStatus,
     radar: {
       meteoFrance: meteoFranceRadar || null,
       rainViewer: rainViewer || null
     },
+    wgr,
     forecastComparison: buildForecastComparison({
       openMeteo,
       metNorway,
@@ -732,7 +745,7 @@ function buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer
   ];
 }
 
-function buildSourceStatus({ id, label, payload, enabled = payload ? true : false, role, priority, errors, extra = {} }) {
+function buildSourceStatus({ id, label, payload, enabled = !!payload, role, priority, errors, extra = {} }) {
   const state = getSourceFreshness(payload);
   const stale = payload?.stale ?? state === "stale";
   const updatedAt = payload?.updatedAt || payload?.validityTime || payload?.fetchedAt || null;
@@ -1026,23 +1039,6 @@ function emptyMetric() {
 
 function isInFutureWindow(timeMs, nowMs, endMs) {
   return typeof timeMs === "number" && timeMs >= nowMs - 5 * 60_000 && timeMs <= endMs;
-}
-
-function formatDuration(minutes) {
-  if (minutes >= 1440) {
-    const days = Math.floor(minutes / 1440);
-    const remainingHours = Math.floor((minutes % 1440) / 60);
-    const dayText = `${days} jour${days > 1 ? "s" : ""}`;
-    return remainingHours ? `${dayText} ${remainingHours} h` : dayText;
-  }
-
-  if (minutes >= 60) {
-    const hours = Math.floor(minutes / 60);
-    const remainingMinutes = minutes % 60;
-    return remainingMinutes ? `${hours} h ${remainingMinutes} min` : `${hours} h`;
-  }
-
-  return `${minutes} min`;
 }
 
 function buildNoRainHeadline(minutes) {

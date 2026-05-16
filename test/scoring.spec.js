@@ -46,6 +46,56 @@ describe("weather scoring", () => {
     expect(status.rain.detail).toBe("");
   });
 
+  it("exposes a public-safe WGR synthesis on the weather status", () => {
+    const now = new Date("2026-05-06T12:00:00.000Z");
+    const status = buildWeatherStatus({
+      location: DEFAULT_LOCATION,
+      settings: DEFAULT_SETTINGS,
+      openMeteo: buildOpenMeteoForecast(now, { precipitationMm: 0.4, temperatureC: 12, windKmh: 8, gustKmh: 18 }),
+      metNorway: null,
+      meteoFranceRadar: {
+        ok: false,
+        nativeLayer: { ok: false },
+        wgr: {
+          status: {
+            source: "meteofrance-radar",
+            available: false,
+            freshness: "unavailable",
+            fallbackReason: "projection missing"
+          }
+        }
+      },
+      rainViewer: {
+        ok: true,
+        imageUrl: "https://example.test/rainviewer-token.png",
+        wgr: {
+          status: {
+            source: "rainviewer",
+            available: true,
+            freshness: "fresh"
+          }
+        }
+      },
+      ecowittObservation: null,
+      now
+    });
+
+    expect(status.wgr).toMatchObject({
+      type: "RadarSynthesis",
+      state: "fallback_rainviewer",
+      observedRain: false,
+      imminentRain: true,
+      coherence: "model_ahead_of_observation",
+      displayHints: {
+        radarSource: "rainviewer",
+        zoomMode: "auto"
+      }
+    });
+    expect(status.wgr.explanations.length).toBeGreaterThan(0);
+    expect(JSON.stringify(status.wgr)).not.toContain("https://");
+    expect(JSON.stringify(status.wgr)).not.toContain("rainviewer-token");
+  });
+
   it("keeps garden entities generic and attached to the status payload", () => {
     const gardenState = normalizeGardenState({
       entities: [

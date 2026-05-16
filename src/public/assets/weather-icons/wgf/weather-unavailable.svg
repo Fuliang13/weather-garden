@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false">
+  <title>Weather Garden — Source indisponible (WGF)</title>
+  <desc>Donnée météo absente ou source en échec.</desc>
+  <circle cx="16" cy="16" r="10.5" fill="#EEF0EE" stroke="#9AA59D" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/><path d="M10.5 10.5l11 11" stroke="#9AA59D" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/><path d="M10.5 21.5l11-11" stroke="#9AA59D" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+</svg>
