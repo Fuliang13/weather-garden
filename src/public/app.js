@@ -131,7 +131,6 @@ const state = {
   radarNativeLayer: null,
   radarMarker: null,
   radarDisplayModel: null,
-  radarRadiusControl: null,
   radarSourceMode: "auto",
   radarBaseLayerKey: "osm",
   radarZoomMode: "auto",
@@ -230,6 +229,8 @@ const els = {
   radarMapNotice: document.querySelector("#radarMapNotice"),
   radarModeSelect: document.querySelector("#radarModeSelect"),
   radarRefreshButton: document.querySelector("#radarRefreshButton"),
+  radarRadiusZoomInButton: document.querySelector("#radarRadiusZoomInButton"),
+  radarRadiusZoomOutButton: document.querySelector("#radarRadiusZoomOutButton"),
   radarZoomToggleButton: document.querySelector("#radarZoomToggleButton"),
   radarSourceLabel: document.querySelector("#radarSourceLabel"),
   radarValidity: document.querySelector("#radarValidity"),
@@ -316,6 +317,8 @@ els.radarBaseLayerSelect?.addEventListener("change", () => {
   renderRadarAttribution(state.radarDisplayModel);
 });
 els.radarRefreshButton?.addEventListener("click", () => loadStatus(true));
+els.radarRadiusZoomInButton?.addEventListener("click", () => stepRadarRadius(-1));
+els.radarRadiusZoomOutButton?.addEventListener("click", () => stepRadarRadius(1));
 els.radarModeSelect?.addEventListener("change", () => {
   state.radarZoomMode = els.radarModeSelect.value === "manual" ? "manual" : "auto";
   renderRadar(state.status?.radar, state.status?.location, state.status?.rain || {});
@@ -2972,6 +2975,7 @@ function renderRadarMetadata(model) {
   els.radarNearestRain.textContent = distanceLabel;
   els.radarControlSource.textContent = model.sourceLabel;
   renderRadarDistanceRings(model.radiusKm);
+  updateRadarRadiusButtons(model.radiusKm);
 }
 
 function renderRadarMapNotice(model) {
@@ -3159,13 +3163,11 @@ function ensureRadarMap(center, location) {
     }).setView(center, 9);
 
     updateRadarBaseLayer();
-    ensureRadarRadiusControl();
 
     state.radarMarker = window.L.marker(center).addTo(state.radarMap);
   } else {
     state.radarMarker.setLatLng(center);
     updateRadarBaseLayer();
-    ensureRadarRadiusControl();
   }
 
   const markerContent = document.createElement("strong");
@@ -3217,38 +3219,6 @@ function renderRadarAttribution(model) {
   els.radarAttribution.hidden = false;
 }
 
-function ensureRadarRadiusControl() {
-  if (state.radarRadiusControl || !state.radarMap || !window.L) {
-    return;
-  }
-
-  const control = window.L.control({ position: "topleft" });
-  control.onAdd = () => {
-    const container = window.L.DomUtil.create("div", "leaflet-bar leaflet-control radar-radius-control");
-    const zoomIn = createRadarRadiusButton("+", "Réduire le rayon radar", () => stepRadarRadius(-1));
-    const zoomOut = createRadarRadiusButton("−", "Augmenter le rayon radar", () => stepRadarRadius(1));
-    container.append(zoomIn, zoomOut);
-    return container;
-  };
-  control.addTo(state.radarMap);
-  state.radarRadiusControl = control;
-}
-
-function createRadarRadiusButton(label, title, onClick) {
-  const button = window.L.DomUtil.create("a", "", null);
-  button.href = "#";
-  button.setAttribute("role", "button");
-  button.title = title;
-  button.setAttribute("aria-label", title);
-  button.textContent = label;
-  window.L.DomEvent.disableClickPropagation(button);
-  window.L.DomEvent.on(button, "click", (event) => {
-    window.L.DomEvent.preventDefault(event);
-    onClick();
-  });
-  return button;
-}
-
 function stepRadarRadius(direction) {
   const current = Number.isFinite(state.radarRadiusKm) ? state.radarRadiusKm : 80;
   const nextRadius = getNextRadarRadiusStep(current, direction);
@@ -3256,11 +3226,30 @@ function stepRadarRadius(direction) {
 }
 
 function getNextRadarRadiusStep(currentRadiusKm, direction) {
-  const closestIndex = RADAR_RADIUS_STEPS_KM.reduce((bestIndex, step, index) => (
-    Math.abs(step - currentRadiusKm) < Math.abs(RADAR_RADIUS_STEPS_KM[bestIndex] - currentRadiusKm) ? index : bestIndex
-  ), 0);
+  const closestIndex = getClosestRadarRadiusStepIndex(currentRadiusKm);
   const nextIndex = Math.max(0, Math.min(RADAR_RADIUS_STEPS_KM.length - 1, closestIndex + direction));
   return RADAR_RADIUS_STEPS_KM[nextIndex];
+}
+
+function getClosestRadarRadiusStepIndex(currentRadiusKm) {
+  const current = Number.isFinite(currentRadiusKm) ? currentRadiusKm : 80;
+  return RADAR_RADIUS_STEPS_KM.reduce((bestIndex, step, index) => (
+    Math.abs(step - current) < Math.abs(RADAR_RADIUS_STEPS_KM[bestIndex] - current) ? index : bestIndex
+  ), 0);
+}
+
+function updateRadarRadiusButtons(radiusKm) {
+  const closestIndex = getClosestRadarRadiusStepIndex(radiusKm);
+  const atMinimum = closestIndex <= 0;
+  const atMaximum = closestIndex >= RADAR_RADIUS_STEPS_KM.length - 1;
+
+  if (els.radarRadiusZoomInButton) {
+    els.radarRadiusZoomInButton.disabled = atMinimum;
+  }
+
+  if (els.radarRadiusZoomOutButton) {
+    els.radarRadiusZoomOutButton.disabled = atMaximum;
+  }
 }
 
 function setRadarManualRadius(radiusKm) {

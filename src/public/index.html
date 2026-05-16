@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Weather Garden</title>
   <link rel="stylesheet" href="/assets/vendor/leaflet/leaflet.css">
-  <link rel="stylesheet" href="/style.css?v=20260516-radar-premium-refine">
+  <link rel="stylesheet" href="/style.css?v=20260516-radar-radius-controls">
 </head>
 <body>
   <main class="app-shell">
@@ -83,6 +83,10 @@
             <div class="radar-map-shell">
               <div class="radar-map-frame">
                 <div id="radarMap" class="radar-map" role="img" aria-label="Radar pluie circulaire centré sur Louvigné-du-Désert"></div>
+                <div class="radar-radius-buttons" aria-label="Contrôles du rayon radar">
+                  <button id="radarRadiusZoomInButton" type="button" aria-label="Réduire le rayon radar" title="Réduire le rayon radar">+</button>
+                  <button id="radarRadiusZoomOutButton" type="button" aria-label="Augmenter le rayon radar" title="Augmenter le rayon radar">−</button>
+                </div>
                 <div id="radarMapNotice" class="radar-map-notice" hidden></div>
                 <div id="radarDistanceRings" class="radar-distance-rings" aria-hidden="true"></div>
               </div>
@@ -435,6 +439,6 @@
   </main>
 
   <script src="/assets/vendor/leaflet/leaflet.js"></script>
-  <script src="/app.js?v=20260516-radar-premium-refine" type="module"></script>
+  <script src="/app.js?v=20260516-radar-radius-controls" type="module"></script>
 </body>
 </html>

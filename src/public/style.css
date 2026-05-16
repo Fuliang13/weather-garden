@@ -3245,28 +3245,47 @@ body[data-active-panel="dashboard"] .panel-nav {
 	pointer-events: none;
 }
 
-.radar-radius-control {
-	margin-top: clamp(1.25rem, 3.5vw, 2.6rem) !important;
-	margin-left: clamp(1.25rem, 3.5vw, 2.6rem) !important;
-	box-shadow: 0 8px 18px rgba(27, 38, 32, 0.12);
+.radar-radius-buttons {
+	position: absolute;
+	top: clamp(1.25rem, 3.5vw, 2.6rem);
+	left: clamp(1.25rem, 3.5vw, 2.6rem);
+	z-index: 620;
+	display: grid;
+	overflow: hidden;
+	border: 1px solid rgba(30, 36, 32, 0.18);
+	border-radius: 0.58rem;
+	background: rgba(255, 255, 255, 0.94);
+	box-shadow: 0 8px 18px rgba(27, 38, 32, 0.14);
 }
 
-.radar-radius-control a {
+.radar-radius-buttons button {
 	display: grid;
-	width: 2.1rem;
-	height: 2.1rem;
+	width: 2.15rem;
+	height: 2.15rem;
+	min-height: 2.15rem;
 	place-items: center;
-	background: rgba(255, 255, 255, 0.92);
+	border: 0;
+	border-radius: 0;
+	background: transparent;
 	color: var(--text);
 	font-size: 1.25rem;
-	font-weight: 700;
+	font-weight: 750;
 	line-height: 1;
-	text-decoration: none;
+	padding: 0;
 }
 
-.radar-radius-control a:hover {
+.radar-radius-buttons button + button {
+	border-top: 1px solid rgba(30, 36, 32, 0.14);
+}
+
+.radar-radius-buttons button:hover:not(:disabled) {
 	background: color-mix(in srgb, var(--soft) 70%, white);
 	color: var(--accent);
+}
+
+.radar-radius-buttons button:disabled {
+	cursor: not-allowed;
+	opacity: 0.4;
 }
 
 .radar-distance-ring {
@@ -3589,14 +3608,15 @@ body[data-active-panel="dashboard"] .panel-nav {
 		width: min(100%, calc(100vw - 2.1rem));
 	}
 
-	.radar-radius-control {
-		margin-top: 1rem !important;
-		margin-left: 1rem !important;
+	.radar-radius-buttons {
+		top: 1rem;
+		left: 1rem;
 	}
 
-	.radar-radius-control a {
-		width: 2rem;
-		height: 2rem;
+	.radar-radius-buttons button {
+		width: 2.45rem;
+		height: 2.45rem;
+		min-height: 2.45rem;
 	}
 
 	.radar-legend {
