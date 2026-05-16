@@ -26,16 +26,18 @@ export function importKml(kmlText, options = {}) {
   const seenIds = new Set();
 
   for (const placemark of placemarks) {
-    const entity = placemarkToGardenEntity(placemark, styles, options, report);
+    const placemarkEntities = placemarkToGardenEntities(placemark, styles, options, report);
 
-    if (!entity) {
+    if (!placemarkEntities.length) {
       report.ignored += 1;
       continue;
     }
 
-    entity.id = uniqueId(entity.id, seenIds);
-    entities.push(entity);
-    report.created += 1;
+    for (const entity of placemarkEntities) {
+      entity.id = uniqueId(entity.id, seenIds);
+      entities.push(entity);
+      report.created += 1;
+    }
   }
 
   return {
@@ -61,41 +63,46 @@ export function exportGardenStateToKml(gardenState, options = {}) {
   ].filter(Boolean).join("\n");
 }
 
-function placemarkToGardenEntity(placemark, styles, options, report) {
+function placemarkToGardenEntities(placemark, styles, options, report) {
   const node = placemark.node;
   const name = childText(node, "name") || node.attrs.id || "KML Placemark";
-  const geometry = readGeometry(node, report, name);
+  const geometries = readGeometries(node, report, name);
 
-  if (!geometry) {
+  if (!geometries.length) {
     report.warnings.push(`Ignored placemark without supported geometry: ${name}`);
-    return null;
+    return [];
   }
 
   const styleUrl = childText(node, "styleUrl");
   const style = resolveStyle(styleUrl, styles);
   const folder = placemark.folders.at(-1) || "";
   const idPrefix = options.idPrefix ? `${options.idPrefix}-` : "";
+  const baseId = `${idPrefix}${slugify(node.attrs.id || name)}`;
+  const multiGeometryGroupId = geometries.length > 1 ? baseId : "";
 
-  return {
-    id: `${idPrefix}${slugify(node.attrs.id || name)}`,
+  return geometries.map((geometry, index) => ({
+    id: index === 0 ? baseId : `${baseId}-${index + 1}`,
     type: inferGardenType(name, folder, geometry.type),
-    name,
+    name: geometries.length === 1 ? name : `${name} ${index + 1}`,
     notes: childText(node, "description"),
     position: geometryToPosition(geometry, folder),
     tags: folder ? [folder] : [],
+    style,
     metadata: {
       source: "kml",
       kml: compactObject({
         placemarkId: node.attrs.id || "",
         folder,
         styleUrl,
-        style,
         geometryType: geometry.type,
         visibility: childText(node, "visibility"),
-        extendedData: readExtendedData(node)
+        extendedData: readExtendedData(node),
+        multiGeometryGroupId,
+        originalPlacemarkName: multiGeometryGroupId ? name : "",
+        multiGeometryIndex: multiGeometryGroupId ? index : null
       })
     }
-  };
+  }));
 }
 
 function gardenEntityToPlacemark(entity) {
@@ -133,36 +140,56 @@ function geometryToPosition(geometry, label) {
   };
 }
 
-function readGeometry(node, report, placemarkName) {
+function readGeometries(node, report, placemarkName) {
   const point = firstChild(node, "Point");
   if (point) {
-    const coordinate = parseCoordinateList(childText(point, "coordinates"))[0];
-    return coordinate ? { type: "Point", coordinates: coordinate } : null;
+    return geometryFromNode(point) || [];
   }
 
   const lineString = firstChild(node, "LineString");
   if (lineString) {
-    const coordinates = parseCoordinateList(childText(lineString, "coordinates"));
-    return coordinates.length >= 2 ? { type: "LineString", coordinates } : null;
+    return geometryFromNode(lineString) || [];
   }
 
   const polygon = firstChild(node, "Polygon");
   if (polygon) {
-    const rings = childrenByName(polygon, "outerBoundaryIs")
-      .flatMap((boundary) => childrenByName(boundary, "LinearRing"))
-      .map((ring) => closeRing(parseCoordinateList(childText(ring, "coordinates"))))
-      .filter((ring) => ring.length >= 4);
-
-    return rings.length ? { type: "Polygon", coordinates: rings } : null;
+    return geometryFromNode(polygon) || [];
   }
 
   const multiGeometry = firstChild(node, "MultiGeometry");
   if (multiGeometry) {
-    const firstSupported = multiGeometry.children.find((child) => ["Point", "LineString", "Polygon"].includes(child.localName));
-    if (firstSupported) {
-      report.warnings.push(`Placemark has MultiGeometry; imported first supported geometry only: ${placemarkName}`);
-      return readGeometry({ ...node, children: [firstSupported] }, report, placemarkName);
+    const geometries = multiGeometry.children
+      .filter((child) => ["Point", "LineString", "Polygon"].includes(child.localName))
+      .flatMap((child) => geometryFromNode(child) || []);
+
+    if (geometries.length) {
+      report.warnings.push(`Placemark has MultiGeometry; imported ${geometries.length} supported geometries: ${placemarkName}`);
     }
+
+    return geometries;
+  }
+
+  return [];
+}
+
+function geometryFromNode(node) {
+  if (node.localName === "Point") {
+    const coordinate = parseCoordinateList(childText(node, "coordinates"))[0];
+    return coordinate ? [{ type: "Point", coordinates: coordinate }] : null;
+  }
+
+  if (node.localName === "LineString") {
+    const coordinates = parseCoordinateList(childText(node, "coordinates"));
+    return coordinates.length >= 2 ? [{ type: "LineString", coordinates }] : null;
+  }
+
+  if (node.localName === "Polygon") {
+    const rings = childrenByName(node, "outerBoundaryIs")
+      .flatMap((boundary) => childrenByName(boundary, "LinearRing"))
+      .map((ring) => closeRing(parseCoordinateList(childText(ring, "coordinates"))))
+      .filter((ring) => ring.length >= 4);
+
+    return rings.length ? [{ type: "Polygon", coordinates: rings }] : null;
   }
 
   return null;

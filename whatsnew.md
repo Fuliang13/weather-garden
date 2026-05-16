@@ -4,6 +4,18 @@ Ce fichier doit être mis à jour à chaque patch livré.
 
 ## Non publié
 
+
+### Jardin / KML 1
+
+- Activation réelle de l’import KML depuis l’onglet Jardin : sélection d’un fichier, envoi au Worker, parsing backend, rapport d’import visible et sauvegarde immédiate du GardenState dans KV.
+- Ajout des endpoints `POST /api/garden/import-kml` et `GET /api/garden/export-kml`.
+- L’export KML est généré depuis le GardenState persisté, avec téléchargement `weather-garden.kml`.
+- Lecture KV de `garden_state` rendue tolérante : si la clé est absente, l’état par défaut est retourné ; si le JSON est corrompu, un état de récupération est retourné sans écraser la valeur corrompue.
+- Le module KML importe désormais les cas simples de `MultiGeometry` en plusieurs entités liées, au lieu de ne conserver que la première géométrie.
+- Le GardenState normalisé conserve maintenant les métadonnées légères d’import, `settings`, `metadata` et `style`, sans stocker le KML brut.
+- Ajout de tests Worker pour import/export KML via KV et corruption de `garden_state`, et d’un test KML pour `MultiGeometry`.
+- Limite : le fichier réel `Le clos noir - version améliorée.kml` est mentionné dans le manifeste mais n’est pas inclus dans le zip ChatGPT, donc la validation automatisée utilise des fixtures KML inline.
+
 ### Correctif socle historique météo
 
 - Correction de la sanitation des messages d’erreur historisés : les URLs complètes sont désormais remplacées par `<redacted-url>`, au lieu de conserver les noms de paramètres sensibles comme `application_key` ou `api_key`.

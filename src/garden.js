@@ -30,7 +30,9 @@ const GARDEN_SENSOR_SOURCES = ["ecowitt"];
 export const DEFAULT_GARDEN_STATE = {
   version: 1,
   entities: [],
-  alerts: []
+  alerts: [],
+  imports: [],
+  metadata: {}
 };
 
 export function createDefaultGardenState(now = new Date()) {
@@ -98,10 +100,13 @@ export function normalizeGardenState(value = {}, now = new Date()) {
   const alerts = toArray(source.alerts).map(normalizeGardenAlert).filter(Boolean);
 
   return {
-    version: 1,
+    version: Number.isInteger(source.version) && source.version > 0 ? source.version : 1,
     updatedAt: toIsoDate(source.updatedAt) || now.toISOString(),
     entities,
-    alerts
+    alerts,
+    imports: normalizeImports(source.imports),
+    settings: normalizeObject(source.settings),
+    metadata: normalizeObject(source.metadata)
   };
 }
 
@@ -201,11 +206,30 @@ function normalizeGardenEntity(entity) {
     tags: normalizeTextList(entity.tags),
     notes: normalizeText(entity.notes),
     photos: toArray(entity.photos).filter(isPlainObject),
+    style: normalizeObject(entity.style),
     metadata: normalizeObject(entity.metadata),
     state: normalizeObject(entity.state),
     sensors: normalizeSensorReferences(entity.sensors),
     rules: toArray(entity.rules).filter(isPlainObject)
   };
+}
+
+function normalizeImports(value) {
+  return toArray(value).map((item) => {
+    if (!isPlainObject(item)) {
+      return null;
+    }
+
+    return {
+      id: normalizeId(item.id) || normalizeId(`${item.type || "import"}-${item.importedAt || ""}`),
+      type: normalizeText(item.type) || "kml",
+      fileName: normalizeText(item.fileName),
+      importedAt: toIsoDate(item.importedAt),
+      mode: normalizeText(item.mode),
+      entityCount: Math.max(0, Math.floor(toFiniteNumber(item.entityCount) || 0)),
+      warnings: normalizeTextList(item.warnings)
+    };
+  }).filter((item) => item?.id);
 }
 
 function normalizeSensorReferences(value) {

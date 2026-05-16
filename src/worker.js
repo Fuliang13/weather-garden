@@ -4,6 +4,7 @@ import { debugMeteoFranceHdf5, debugMeteoFranceRadar, fetchMeteoFranceRadar, fet
 import { fetchEcowittDiagnostics, fetchEcowittObservation } from "./sources/ecowitt.js";
 import { DEFAULT_LOCATION, DEFAULT_SETTINGS, buildWeatherStatus, mergeSettings } from "./scoring.js";
 import { buildGardenStatus, createDefaultGardenState, deleteGardenEntity, normalizeGardenState, upsertGardenEntity } from "./garden.js";
+import { exportGardenStateToKml, importKml } from "./kml.js";
 import { WEATHER_HISTORY_RECENT_KEY, buildWeatherHistoryDebugReport, persistWeatherHistorySample } from "./weatherHistory.js";
 
 const KV_KEYS = {
@@ -90,11 +91,66 @@ export default {
       }
 
       if (url.pathname === "/api/garden" && request.method === "POST") {
-        const body = await request.json();
+        const body = await readJsonBody(request);
         const gardenState = normalizeGardenState(body);
         await storeGardenState(env, gardenState);
         ctx.waitUntil(computeAndStoreStatus(env));
         return json(gardenState);
+      }
+
+      if (url.pathname === "/api/garden/import-kml" && request.method === "POST") {
+        const payload = await readGardenKmlPayload(request);
+        const imported = importKml(payload.kml, { fileName: payload.fileName });
+
+        if (imported.report.errors.length) {
+          return json({ ok: false, error: imported.report.errors[0], report: imported.report }, 400);
+        }
+
+        if (!imported.entities.length) {
+          return json({ ok: false, error: "Aucune entité exploitable dans ce fichier KML.", report: imported.report }, 400);
+        }
+
+        const importedAt = new Date().toISOString();
+        const gardenState = normalizeGardenState({
+          entities: imported.entities,
+          imports: [{
+            id: `kml-${Date.now()}`,
+            type: "kml",
+            fileName: payload.fileName,
+            importedAt,
+            mode: "replace",
+            entityCount: imported.entities.length,
+            warnings: imported.report.warnings
+          }],
+          metadata: {
+            kml: {
+              documentName: imported.documentName,
+              lastImport: {
+                fileName: payload.fileName,
+                importedAt
+              }
+            }
+          },
+          updatedAt: importedAt
+        });
+
+        await storeGardenState(env, gardenState);
+        return json({ ok: true, garden: gardenState, report: imported.report });
+      }
+
+      if (url.pathname === "/api/garden/export-kml" && request.method === "GET") {
+        const gardenState = await loadGardenState(env);
+        const kml = exportGardenStateToKml(gardenState, {
+          documentName: gardenState.metadata?.kml?.documentName || "Weather Garden"
+        });
+
+        return new Response(kml, {
+          headers: {
+            "content-type": "application/vnd.google-earth.kml+xml; charset=utf-8",
+            "content-disposition": "attachment; filename=weather-garden.kml",
+            "cache-control": "no-store"
+          }
+        });
       }
 
       if (url.pathname === "/api/garden/reset" && request.method === "POST") {
@@ -105,7 +161,7 @@ export default {
       }
 
       if (url.pathname === "/api/garden/entities" && request.method === "POST") {
-        const body = await request.json();
+        const body = await readJsonBody(request);
         const gardenState = upsertGardenEntity(await loadGardenState(env), body);
         await storeGardenState(env, gardenState);
         ctx.waitUntil(computeAndStoreStatus(env));
@@ -190,6 +246,8 @@ async function getDebugStatus(env) {
       "/api/debug/ecowitt",
       "/api/debug/rain",
       "/api/garden",
+      "/api/garden/import-kml",
+      "/api/garden/export-kml",
       "/api/settings"
     ],
     status
@@ -277,17 +335,74 @@ async function loadSettings(env) {
 }
 
 async function loadGardenState(env) {
-  const stored = await env.WEATHER_KV.get(KV_KEYS.gardenState, "json");
+  const stored = await env.WEATHER_KV.get(KV_KEYS.gardenState);
 
   if (!stored) {
     return createDefaultGardenState();
   }
 
-  return normalizeGardenState(stored || {});
+  try {
+    return normalizeGardenState(JSON.parse(stored));
+  } catch (error) {
+    const fallback = createDefaultGardenState();
+    return normalizeGardenState({
+      ...fallback,
+      metadata: {
+        ...fallback.metadata,
+        recovery: {
+          key: KV_KEYS.gardenState,
+          reason: "corrupt_json",
+          message: "GardenState KV illisible. État par défaut retourné sans écraser la valeur stockée."
+        }
+      }
+    });
+  }
 }
 
 async function storeGardenState(env, gardenState) {
-  await env.WEATHER_KV.put(KV_KEYS.gardenState, JSON.stringify(normalizeGardenState(gardenState)));
+  const normalized = normalizeGardenState(gardenState);
+  await env.WEATHER_KV.put(KV_KEYS.gardenState, JSON.stringify(normalized));
+}
+
+async function readJsonBody(request) {
+  try {
+    return await request.json();
+  } catch (error) {
+    throw new Error("JSON invalide.");
+  }
+}
+
+async function readGardenKmlPayload(request) {
+  const contentType = request.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    const body = await readJsonBody(request);
+    const kml = typeof body.kml === "string" ? body.kml : "";
+    if (!kml.trim()) {
+      throw new Error("Fichier KML vide.");
+    }
+    return {
+      kml,
+      fileName: sanitizeFileName(body.fileName) || "jardin.kml"
+    };
+  }
+
+  const kml = await request.text();
+  if (!kml.trim()) {
+    throw new Error("Fichier KML vide.");
+  }
+
+  return {
+    kml,
+    fileName: sanitizeFileName(request.headers.get("x-garden-kml-filename")) || "jardin.kml"
+  };
+}
+
+function sanitizeFileName(value) {
+  return String(value || "")
+    .replace(/[\\/\u0000-\u001f]/g, "")
+    .trim()
+    .slice(0, 120);
 }
 
 function sanitizePublicSettings(settings = {}) {

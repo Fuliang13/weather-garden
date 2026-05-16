@@ -55,6 +55,7 @@ const state = {
   gardenDetailTab: "info",
   gardenSaveError: null,
   gardenSaving: false,
+  gardenImportInput: null,
   radarMap: null,
   radarBaseLayer: null,
   radarRainLayer: null,
@@ -188,8 +189,8 @@ els.deleteGardenEntityButton?.addEventListener("click", () => {
   }
 });
 els.duplicateGardenEntityButton?.addEventListener("click", duplicateSelectedGardenEntity);
-els.importKmlButton?.addEventListener("click", showKmlUnavailable);
-els.exportKmlButton?.addEventListener("click", showKmlUnavailable);
+els.importKmlButton?.addEventListener("click", chooseGardenKmlFile);
+els.exportKmlButton?.addEventListener("click", exportGardenKml);
 document.querySelectorAll("[data-garden-action]").forEach((button) => {
   button.addEventListener("click", handleGardenAction);
 });
@@ -1784,9 +1785,9 @@ function handleGardenAction(event) {
   const action = event.currentTarget.dataset.gardenAction;
 
   if (action === "import") {
-    showKmlUnavailable();
+    chooseGardenKmlFile();
   } else if (action === "export") {
-    showKmlUnavailable();
+    exportGardenKml();
   } else if (action === "add") {
     startCreateGardenEntity();
   } else if (action === "center-map") {
@@ -1827,8 +1828,114 @@ function startCreateGardenEntity() {
   renderGardenWorkspace(getGardenEntities(state.status), state.status?.location);
 }
 
+function chooseGardenKmlFile() {
+  if (!state.gardenImportInput) {
+    state.gardenImportInput = document.createElement("input");
+    state.gardenImportInput.type = "file";
+    state.gardenImportInput.accept = ".kml,application/vnd.google-earth.kml+xml,application/xml,text/xml";
+    state.gardenImportInput.addEventListener("change", () => {
+      const file = state.gardenImportInput.files?.[0];
+      state.gardenImportInput.value = "";
+
+      if (file) {
+        importGardenKmlFile(file);
+      }
+    });
+  }
+
+  state.gardenImportInput.click();
+}
+
+async function importGardenKmlFile(file) {
+  state.gardenSaving = true;
+  state.gardenSaveError = null;
+  updateGardenFormState();
+  els.gardenKmlMessage.textContent = `Import de ${file.name} en cours…`;
+
+  try {
+    const response = await fetch("/api/garden/import-kml", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        fileName: file.name,
+        kml: await file.text()
+      })
+    });
+    const data = await readJsonResponse(response);
+
+    if (!response.ok || data.ok === false) {
+      throw new Error(data.error || "Import KML impossible.");
+    }
+
+    state.gardenState = data.garden;
+    state.selectedGardenEntityId = data.garden.entities?.[0]?.id || null;
+    state.gardenDirty = false;
+    state.gardenDetailTab = "info";
+    els.gardenKmlMessage.textContent = buildGardenImportMessage(data.report);
+    await loadStatus(true);
+  } catch (error) {
+    state.gardenSaveError = error;
+    els.gardenKmlMessage.textContent = error.message;
+  } finally {
+    state.gardenSaving = false;
+    updateGardenFormState();
+  }
+}
+
+async function exportGardenKml() {
+  state.gardenSaving = true;
+  state.gardenSaveError = null;
+  updateGardenFormState();
+  els.gardenKmlMessage.textContent = "Préparation de l’export KML…";
+
+  try {
+    const response = await fetch("/api/garden/export-kml");
+
+    if (!response.ok) {
+      const data = await readJsonResponse(response);
+      throw new Error(data.error || "Export KML impossible.");
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "weather-garden.kml";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    els.gardenKmlMessage.textContent = "Export KML généré depuis le GardenState enregistré.";
+  } catch (error) {
+    state.gardenSaveError = error;
+    els.gardenKmlMessage.textContent = error.message;
+  } finally {
+    state.gardenSaving = false;
+    updateGardenFormState();
+  }
+}
+
+function buildGardenImportMessage(report = {}) {
+  const created = Number.isFinite(report.created) ? report.created : 0;
+  const ignored = Number.isFinite(report.ignored) ? report.ignored : 0;
+  const warnings = Array.isArray(report.warnings) ? report.warnings.length : 0;
+  const parts = [`KML importé et sauvegardé : ${formatGardenEntityCount(created)}`];
+
+  if (ignored) {
+    parts.push(`${ignored} élément ignoré${ignored > 1 ? "s" : ""}`);
+  }
+
+  if (warnings) {
+    parts.push(`${warnings} avertissement${warnings > 1 ? "s" : ""}`);
+  }
+
+  return `${parts.join(" · ")}.`;
+}
+
 function showKmlUnavailable() {
-  els.gardenKmlMessage.textContent = "Import/export KML bientôt disponible après intégration du module et de l'API KML.";
+  chooseGardenKmlFile();
 }
 
 function filterGardenEntities(entities) {
