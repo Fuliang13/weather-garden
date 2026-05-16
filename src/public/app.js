@@ -56,6 +56,53 @@ const SOURCE_DISPLAY_LABELS = {
   rainviewer: "RainViewer (fallback)"
 };
 
+const MAP_BASE_LAYER_DEFINITIONS = {
+  osm: {
+    label: "OpenStreetMap",
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    options: {
+      maxZoom: 20,
+      attribution: "&copy; OpenStreetMap"
+    }
+  },
+  "ign-plan": {
+    label: "IGN Plan V2",
+    url: "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&FORMAT=image/png&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}",
+    options: {
+      maxNativeZoom: 19,
+      maxZoom: 22,
+      attribution: "&copy; IGN · Géoplateforme"
+    }
+  },
+  "ign-ortho": {
+    label: "IGN Orthophotos",
+    url: "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&FORMAT=image/jpeg&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}",
+    options: {
+      maxNativeZoom: 19,
+      maxZoom: 22,
+      attribution: "&copy; IGN · Géoplateforme"
+    }
+  }
+};
+
+const GARDEN_CADASTRE_LAYER_DEFINITION = {
+  label: "Cadastre IGN",
+  url: "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&STYLE=normal&FORMAT=image/png&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}",
+  options: {
+    maxNativeZoom: 19,
+    maxZoom: 22,
+    opacity: 0.72,
+    zIndex: 30,
+    attribution: "&copy; IGN · Cadastre"
+  }
+};
+
+const RADAR_SOURCE_LABELS = {
+  auto: "Auto",
+  meteofrance: "Météo-France",
+  rainviewer: "RainViewer"
+};
+
 const state = {
   status: null,
   gardenState: null,
@@ -66,6 +113,7 @@ const state = {
   gardenDirty: false,
   gardenMap: null,
   gardenBaseLayer: null,
+  gardenCadastreLayer: null,
   gardenLayers: null,
   gardenLayerById: new Map(),
   gardenSearchQuery: "",
@@ -74,11 +122,16 @@ const state = {
   gardenSaveError: null,
   gardenSaving: false,
   gardenImportInput: null,
+  gardenBaseLayerKey: "osm",
+  gardenCadastreVisible: false,
   radarMap: null,
   radarBaseLayer: null,
   radarRainLayer: null,
   radarNativeLayer: null,
   radarMarker: null,
+  radarDisplayModel: null,
+  radarSourceMode: "auto",
+  radarBaseLayerKey: "osm",
   radarZoomMode: "auto",
   radarRadiusKm: null,
   refreshTimer: null,
@@ -151,6 +204,9 @@ const els = {
   duplicateGardenEntityButton: document.querySelector("#duplicateGardenEntityButton"),
   importKmlButton: document.querySelector("#importKmlButton"),
   exportKmlButton: document.querySelector("#exportKmlButton"),
+  gardenLayerPanel: document.querySelector("#gardenLayerPanel"),
+  gardenBaseLayerSelect: document.querySelector("#gardenBaseLayerSelect"),
+  gardenCadastreOverlay: document.querySelector("#gardenCadastreOverlay"),
   gardenAlertsCard: document.querySelector("#gardenAlertsCard"),
   gardenAlertsTitle: document.querySelector("#gardenAlertsTitle"),
   gardenAlertsSummary: document.querySelector("#gardenAlertsSummary"),
@@ -164,6 +220,9 @@ const els = {
   radarMap: document.querySelector("#radarMap"),
   radarLegend: document.querySelector("#radarLegend"),
   radarAttribution: document.querySelector("#radarAttribution"),
+  radarLayerPanel: document.querySelector("#radarLayerPanel"),
+  radarSourceSelect: document.querySelector("#radarSourceSelect"),
+  radarBaseLayerSelect: document.querySelector("#radarBaseLayerSelect"),
   radarModeSelect: document.querySelector("#radarModeSelect"),
   radarRefreshButton: document.querySelector("#radarRefreshButton"),
   radarZoomToggleButton: document.querySelector("#radarZoomToggleButton"),
@@ -232,6 +291,24 @@ els.deleteGardenEntityButton?.addEventListener("click", () => {
 els.duplicateGardenEntityButton?.addEventListener("click", duplicateSelectedGardenEntity);
 els.importKmlButton?.addEventListener("click", chooseGardenKmlFile);
 els.exportKmlButton?.addEventListener("click", exportGardenKml);
+els.gardenBaseLayerSelect?.addEventListener("change", () => {
+  state.gardenBaseLayerKey = normalizeMapBaseLayerKey(els.gardenBaseLayerSelect.value);
+  updateGardenBaseLayer();
+});
+els.gardenCadastreOverlay?.addEventListener("change", () => {
+  state.gardenCadastreVisible = !!els.gardenCadastreOverlay.checked;
+  updateGardenCadastreLayer();
+});
+els.radarAttribution?.addEventListener("click", toggleRadarLayerPanel);
+els.radarSourceSelect?.addEventListener("change", () => {
+  state.radarSourceMode = normalizeRadarSourceMode(els.radarSourceSelect.value);
+  renderRadar(state.status?.radar, state.status?.location, state.status?.rain || {});
+});
+els.radarBaseLayerSelect?.addEventListener("change", () => {
+  state.radarBaseLayerKey = normalizeMapBaseLayerKey(els.radarBaseLayerSelect.value);
+  updateRadarBaseLayer();
+  renderRadarAttribution(state.radarDisplayModel);
+});
 els.radarRefreshButton?.addEventListener("click", () => loadStatus(true));
 els.radarModeSelect?.addEventListener("change", () => {
   state.radarZoomMode = els.radarModeSelect.value === "manual" ? "manual" : "auto";
@@ -1732,15 +1809,89 @@ function ensureGardenMap(center) {
       scrollWheelZoom: false
     }).setView(center, 16);
 
-    state.gardenBaseLayer = window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 20,
-      attribution: "&copy; OpenStreetMap"
-    }).addTo(state.gardenMap);
-
+    updateGardenBaseLayer();
+    updateGardenCadastreLayer();
     state.gardenLayers = window.L.layerGroup().addTo(state.gardenMap);
   } else {
     state.gardenMap.setView(center, state.gardenMap.getZoom() || 16);
+    updateGardenBaseLayer();
+    updateGardenCadastreLayer();
   }
+}
+
+function updateGardenBaseLayer() {
+  if (!state.gardenMap) {
+    return;
+  }
+
+  const key = normalizeMapBaseLayerKey(state.gardenBaseLayerKey);
+
+  if (state.gardenBaseLayer?.options?.weatherGardenKey === key) {
+    return;
+  }
+
+  if (state.gardenBaseLayer) {
+    state.gardenMap.removeLayer(state.gardenBaseLayer);
+  }
+
+  state.gardenBaseLayerKey = key;
+  state.gardenBaseLayer = createMapTileLayer(key, () => handleGardenBaseLayerError(key)).addTo(state.gardenMap);
+
+  if (els.gardenBaseLayerSelect) {
+    els.gardenBaseLayerSelect.value = key;
+  }
+}
+
+function updateGardenCadastreLayer() {
+  if (!state.gardenMap) {
+    return;
+  }
+
+  if (state.gardenCadastreLayer) {
+    state.gardenMap.removeLayer(state.gardenCadastreLayer);
+    state.gardenCadastreLayer = null;
+  }
+
+  if (!state.gardenCadastreVisible) {
+    if (els.gardenCadastreOverlay) {
+      els.gardenCadastreOverlay.checked = false;
+    }
+    return;
+  }
+
+  state.gardenCadastreLayer = window.L.tileLayer(GARDEN_CADASTRE_LAYER_DEFINITION.url, {
+    ...GARDEN_CADASTRE_LAYER_DEFINITION.options,
+    weatherGardenKey: "cadastre"
+  });
+  state.gardenCadastreLayer.once("tileerror", handleGardenCadastreLayerError);
+  state.gardenCadastreLayer.addTo(state.gardenMap);
+
+  if (els.gardenCadastreOverlay) {
+    els.gardenCadastreOverlay.checked = true;
+  }
+}
+
+function handleGardenBaseLayerError(key) {
+  if (key === "osm") {
+    return;
+  }
+
+  state.gardenBaseLayerKey = "osm";
+  if (els.gardenMapMessage) {
+    els.gardenMapMessage.textContent = "Couche IGN indisponible : fond OpenStreetMap affiché.";
+  }
+  updateGardenBaseLayer();
+}
+
+function handleGardenCadastreLayerError() {
+  state.gardenCadastreVisible = false;
+  if (els.gardenCadastreOverlay) {
+    els.gardenCadastreOverlay.checked = false;
+  }
+  if (els.gardenMapMessage) {
+    els.gardenMapMessage.textContent = "Cadastre IGN indisponible : couche désactivée.";
+  }
+  updateGardenCadastreLayer();
 }
 
 function updateGardenLayers(entities) {
@@ -1940,6 +2091,8 @@ function handleGardenAction(event) {
     centerGardenMap();
   } else if (action === "center-selected") {
     centerGardenEntity(state.selectedGardenEntityId);
+  } else if (action === "layers") {
+    toggleGardenLayerPanel(event.currentTarget);
   } else {
     els.gardenKmlMessage.textContent = `${event.currentTarget.textContent} sera disponible dans une prochaine passe.`;
   }
@@ -2633,11 +2786,18 @@ function renderGardenAlerts(alerts) {
 
 function renderRadar(radar, location, rain = {}) {
   const model = buildRadarDisplayModel(radar, rain);
+  state.radarDisplayModel = model;
 
   if (model.nativeLayer) {
     els.radarStatus.textContent = `${uiText("@{%Radar Météo-France natif affiché%}")}${model.validityTime ? ` · ${uiText("@{%donnée radar du%}")} ${formatDate(model.validityTime)}` : ""}.`;
   } else if (model.rainViewerTileUrl) {
-    els.radarStatus.textContent = buildRainViewerFallbackText(radar?.meteoFrance, radar?.rainViewer);
+    els.radarStatus.textContent = state.radarSourceMode === "rainviewer"
+      ? `${uiText("@{%RainViewer affiché%}")} · ${uiText("@{%image radar du%}")} ${formatDate(model.validityTime)}.`
+      : buildRainViewerFallbackText(radar?.meteoFrance, radar?.rainViewer);
+  } else if (state.radarSourceMode === "meteofrance") {
+    els.radarStatus.textContent = "Météo-France sélectionné, mais la couche native n'est pas exploitable pour ce refresh.";
+  } else if (state.radarSourceMode === "rainviewer") {
+    els.radarStatus.textContent = "RainViewer sélectionné, mais aucune tuile radar n'est disponible pour ce refresh.";
   } else if (radar?.meteoFrance?.ok) {
     els.radarStatus.textContent = `${uiText("@{%Radar Météo-France disponible, mais couche native non exploitable%}")}${radar.meteoFrance.diagnostics?.fallbackReason ? ` · ${radar.meteoFrance.diagnostics.fallbackReason}` : ""}.`;
   } else {
@@ -2651,16 +2811,23 @@ function renderRadar(radar, location, rain = {}) {
   });
   renderRadarMetadata(model);
 
-  els.radarLegend.hidden = !model.nativeLayer && !model.rainViewerTileUrl;
-  els.radarAttribution.textContent = model.nativeLayer ? uiText("@{%Météo-France · OpenStreetMap%}") : (model.rainViewerTileUrl ? "RainViewer · OpenStreetMap" : "");
+  els.radarLegend.hidden = false;
+  els.radarLegend.dataset.hasRadar = String(!!model.nativeLayer || !!model.rainViewerTileUrl);
+  renderRadarAttribution(model);
 }
 
 function buildRadarDisplayModel(radar, rain) {
   const rainViewer = radar?.rainViewer;
   const meteoFrance = radar?.meteoFrance;
-  const nativeLayer = meteoFrance?.nativeLayer?.ok ? meteoFrance.nativeLayer : null;
-  const rainViewerTileUrl = nativeLayer ? null : getRainViewerTileUrl(rainViewer);
-  const sourceStatus = nativeLayer ? findSourceStatus("meteofrance-radar") : rainViewerTileUrl ? findSourceStatus("rainviewer") : findSourceStatus("meteofrance-radar");
+  const availableNativeLayer = meteoFrance?.nativeLayer?.ok ? meteoFrance.nativeLayer : null;
+  const availableRainViewerTileUrl = getRainViewerTileUrl(rainViewer);
+  const sourceMode = normalizeRadarSourceMode(state.radarSourceMode);
+  const useNativeLayer = !!availableNativeLayer && (sourceMode === "auto" || sourceMode === "meteofrance");
+  const useRainViewer = !!availableRainViewerTileUrl && (sourceMode === "rainviewer" || sourceMode === "auto" && !useNativeLayer);
+  const nativeLayer = useNativeLayer ? availableNativeLayer : null;
+  const rainViewerTileUrl = useRainViewer ? availableRainViewerTileUrl : null;
+  const selectedSource = nativeLayer ? "meteofrance" : rainViewerTileUrl ? "rainviewer" : sourceMode === "rainviewer" ? "rainviewer" : "meteofrance";
+  const sourceStatus = selectedSource === "rainviewer" ? findSourceStatus("rainviewer") : findSourceStatus("meteofrance-radar");
   const nearestRainDistanceKm = getNearestRainDistanceKm(radar, rain);
   const targetRadiusKm = getRadarTargetRadiusKm(nearestRainDistanceKm, rain);
   const radiusKm = getSmoothedRadarRadiusKm(targetRadiusKm);
@@ -2668,10 +2835,16 @@ function buildRadarDisplayModel(radar, rain) {
   return {
     nativeLayer,
     rainViewerTileUrl,
-    sourceLabel: nativeLayer ? "Météo-France Radar" : rainViewerTileUrl ? "RainViewer fallback" : "Indisponible",
-    validityTime: nativeLayer?.validityTime || meteoFrance?.validityTime || rainViewer?.frameTime || rainViewer?.generatedAt || null,
+    sourceKey: selectedSource,
+    sourceMode,
+    sourceLabel: selectedSource === "meteofrance" ? "Météo-France Radar" : "RainViewer",
+    validityTime: selectedSource === "meteofrance"
+      ? nativeLayer?.validityTime || meteoFrance?.validityTime || null
+      : rainViewer?.frameTime || rainViewer?.generatedAt || null,
     freshnessLabel: formatRadarFreshness(sourceStatus, nativeLayer || rainViewer),
-    fallbackLabel: rainViewerTileUrl ? "Fallback RainViewer affiché" : "",
+    fallbackLabel: selectedSource === "rainviewer" && sourceMode === "auto"
+      ? "Fallback RainViewer affiché"
+      : selectedSource === "rainviewer" ? "RainViewer sélectionné · fallback visuel" : "",
     nearestRainDistanceKm,
     radiusKm
   };
@@ -2695,6 +2868,12 @@ function renderRadarMetadata(model) {
   els.radarZoomMessage.textContent = state.radarZoomMode === "auto" ? autoMessage : "Zoom automatique désactivé : la carte conserve le cadrage utilisateur.";
   els.radarZoomToggleButton.textContent = state.radarZoomMode === "auto" ? "Désactiver" : "Réactiver";
   els.radarModeSelect.value = state.radarZoomMode;
+  if (els.radarSourceSelect) {
+    els.radarSourceSelect.value = state.radarSourceMode;
+  }
+  if (els.radarBaseLayerSelect) {
+    els.radarBaseLayerSelect.value = state.radarBaseLayerKey;
+  }
   els.radarControlMode.textContent = modeLabel;
   els.radarControlRadius.textContent = radiusLabel;
   els.radarNearestRain.textContent = distanceLabel;
@@ -2880,19 +3059,61 @@ function ensureRadarMap(center, location) {
       attributionControl: true
     }).setView(center, 9);
 
-    state.radarBaseLayer = window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: "&copy; OpenStreetMap"
-    }).addTo(state.radarMap);
+    updateRadarBaseLayer();
 
     state.radarMarker = window.L.marker(center).addTo(state.radarMap);
   } else {
     state.radarMarker.setLatLng(center);
+    updateRadarBaseLayer();
   }
 
   const markerContent = document.createElement("strong");
   markerContent.textContent = location?.name || "Position météo";
   state.radarMarker.bindPopup(markerContent);
+}
+
+function updateRadarBaseLayer() {
+  if (!state.radarMap) {
+    return;
+  }
+
+  const key = normalizeMapBaseLayerKey(state.radarBaseLayerKey);
+
+  if (state.radarBaseLayer?.options?.weatherGardenKey === key) {
+    return;
+  }
+
+  if (state.radarBaseLayer) {
+    state.radarMap.removeLayer(state.radarBaseLayer);
+  }
+
+  state.radarBaseLayerKey = key;
+  state.radarBaseLayer = createMapTileLayer(key, () => handleRadarBaseLayerError(key)).addTo(state.radarMap);
+
+  if (els.radarBaseLayerSelect) {
+    els.radarBaseLayerSelect.value = key;
+  }
+}
+
+function handleRadarBaseLayerError(key) {
+  if (key === "osm") {
+    return;
+  }
+
+  state.radarBaseLayerKey = "osm";
+  updateRadarBaseLayer();
+  renderRadarAttribution(state.radarDisplayModel);
+}
+
+function renderRadarAttribution(model) {
+  if (!els.radarAttribution) {
+    return;
+  }
+
+  const sourceLabel = model?.sourceLabel || RADAR_SOURCE_LABELS[state.radarSourceMode] || "Radar";
+  const baseLabel = getMapBaseLayerLabel(state.radarBaseLayerKey);
+  els.radarAttribution.textContent = `${sourceLabel} · ${baseLabel}`;
+  els.radarAttribution.hidden = false;
 }
 
 function updateRadarViewport(center, radiusKm) {
@@ -3084,6 +3305,54 @@ function deriveRainViewerTileUrl(imageUrl) {
   }
 
   return `${match[1]}/512/{z}/{x}/{y}/${match[2]}`;
+}
+
+function toggleRadarLayerPanel() {
+  toggleMapLayerPanel(els.radarLayerPanel, els.radarAttribution);
+}
+
+function toggleGardenLayerPanel(button) {
+  toggleMapLayerPanel(els.gardenLayerPanel, button);
+}
+
+function toggleMapLayerPanel(panel, trigger) {
+  if (!panel) {
+    return;
+  }
+
+  const isHidden = panel.hidden;
+  panel.hidden = !isHidden;
+
+  if (trigger) {
+    trigger.setAttribute("aria-expanded", String(isHidden));
+  }
+}
+
+function normalizeMapBaseLayerKey(value) {
+  return MAP_BASE_LAYER_DEFINITIONS[value] ? value : "osm";
+}
+
+function normalizeRadarSourceMode(value) {
+  return RADAR_SOURCE_LABELS[value] ? value : "auto";
+}
+
+function getMapBaseLayerLabel(key) {
+  return MAP_BASE_LAYER_DEFINITIONS[normalizeMapBaseLayerKey(key)].label;
+}
+
+function createMapTileLayer(key, onTileError) {
+  const normalizedKey = normalizeMapBaseLayerKey(key);
+  const definition = MAP_BASE_LAYER_DEFINITIONS[normalizedKey];
+  const layer = window.L.tileLayer(definition.url, {
+    ...definition.options,
+    weatherGardenKey: normalizedKey
+  });
+
+  if (onTileError) {
+    layer.once("tileerror", onTileError);
+  }
+
+  return layer;
 }
 
 function getSourceStatus(source) {

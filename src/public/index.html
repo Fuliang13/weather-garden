@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Weather Garden</title>
   <link rel="stylesheet" href="/assets/vendor/leaflet/leaflet.css">
-  <link rel="stylesheet" href="/style.css?v=20260516-dashboard-sources-ui">
+  <link rel="stylesheet" href="/style.css?v=20260516-map-layers">
 </head>
 <body>
   <main class="app-shell">
@@ -99,7 +99,25 @@
               <p class="radar-legend-note">
                 Les couleurs indiquent l'intensité radar, pas le cumul exact au sol.
               </p>
-              <span id="radarAttribution" class="radar-attribution"></span>
+              <button id="radarAttribution" type="button" class="radar-attribution" aria-expanded="false" aria-controls="radarLayerPanel"></button>
+              <div id="radarLayerPanel" class="map-layer-panel radar-layer-panel" hidden>
+                <label>
+                  Source radar
+                  <select id="radarSourceSelect">
+                    <option value="auto">Auto</option>
+                    <option value="meteofrance">Météo-France</option>
+                    <option value="rainviewer">RainViewer</option>
+                  </select>
+                </label>
+                <label>
+                  Fond de carte
+                  <select id="radarBaseLayerSelect">
+                    <option value="osm">OpenStreetMap</option>
+                    <option value="ign-plan">IGN Plan V2</option>
+                    <option value="ign-ortho">IGN Orthophotos</option>
+                  </select>
+                </label>
+              </div>
             </div>
           </section>
 
@@ -229,9 +247,23 @@
                   <button type="button" class="secondary" data-garden-action="export">Exporter en KML</button>
                   <button type="button" data-garden-action="add">Ajouter</button>
                   <button type="button" class="secondary" data-garden-action="draw">Dessiner</button>
-                  <button type="button" class="secondary" data-garden-action="layers">Couches</button>
+                  <button type="button" class="secondary" data-garden-action="layers" aria-expanded="false" aria-controls="gardenLayerPanel">Couches</button>
                   <button type="button" class="secondary" data-garden-action="center-map">Recentrer</button>
                 </div>
+              </div>
+              <div id="gardenLayerPanel" class="map-layer-panel garden-layer-panel" hidden>
+                <label>
+                  Fond de carte
+                  <select id="gardenBaseLayerSelect">
+                    <option value="osm">OpenStreetMap</option>
+                    <option value="ign-plan">IGN Plan V2</option>
+                    <option value="ign-ortho">IGN Orthophotos</option>
+                  </select>
+                </label>
+                <label class="map-layer-checkbox">
+                  <input id="gardenCadastreOverlay" type="checkbox">
+                  Cadastre IGN
+                </label>
               </div>
               <div class="garden-map-container">
                 <div id="gardenMap" class="garden-map" role="img" aria-label="Carte Jardin séparée du radar météo"></div>
@@ -405,6 +437,6 @@
   </main>
 
   <script src="/assets/vendor/leaflet/leaflet.js"></script>
-  <script src="/app.js?v=20260516-dashboard-sources-ui" type="module"></script>
+  <script src="/app.js?v=20260516-map-layers" type="module"></script>
 </body>
 </html>

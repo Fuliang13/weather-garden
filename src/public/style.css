@@ -1432,13 +1432,85 @@ body[data-active-panel="garden"] .app-shell {
 }
 
 .radar-attribution {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	min-height: 1.8rem;
 	border: 1px solid var(--border);
 	border-radius: 999px;
 	background: var(--soft);
 	color: var(--muted);
 	font-size: 0.8rem;
+	font-weight: 650;
 	padding: 0.35rem 0.6rem;
 	white-space: nowrap;
+}
+
+.radar-attribution::after {
+	content: "▾";
+	color: var(--accent);
+	font-size: 0.7rem;
+}
+
+.radar-attribution:hover {
+	border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+	background: color-mix(in srgb, var(--soft) 72%, white);
+	color: var(--text);
+}
+
+.map-layer-panel {
+	display: grid;
+	gap: 0.65rem;
+	border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+	border-radius: 1rem;
+	background: color-mix(in srgb, var(--card) 92%, var(--soft));
+	box-shadow: 0 12px 30px rgba(27, 38, 32, 0.08);
+	padding: 0.75rem;
+}
+
+.map-layer-panel[hidden] {
+	display: none;
+}
+
+.map-layer-panel label {
+	display: grid;
+	gap: 0.3rem;
+	color: var(--muted);
+	font-size: 0.78rem;
+	font-weight: 680;
+}
+
+.map-layer-panel select {
+	width: 100%;
+	min-height: 2.5rem;
+	border: 1px solid var(--border);
+	border-radius: 0.75rem;
+	background: white;
+	color: var(--text);
+	font-weight: 650;
+	padding: 0.5rem 0.65rem;
+}
+
+.map-layer-checkbox {
+	display: flex !important;
+	align-items: center;
+	gap: 0.5rem;
+	color: var(--text) !important;
+}
+
+.map-layer-checkbox input {
+	width: auto;
+}
+
+.radar-layer-panel {
+	flex: 1 1 100%;
+	width: min(100%, 22rem);
+	margin-left: auto;
+}
+
+.garden-layer-panel {
+	width: min(100%, 28rem);
+	margin-left: auto;
 }
 
 .radar-map {
@@ -1470,6 +1542,7 @@ body[data-active-panel="garden"] .app-shell {
 
 .radar-legend {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
 	justify-content: space-between;
 	gap: 1rem;
@@ -1524,6 +1597,11 @@ body[data-active-panel="garden"] .app-shell {
 	margin: 0;
 	color: var(--muted);
 	font-size: 0.85rem;
+}
+
+.radar-legend[data-has-radar="false"] .radar-legend-scale,
+.radar-legend[data-has-radar="false"] .radar-legend-note {
+	display: none;
 }
 
 .settings-form {
@@ -1909,7 +1987,13 @@ button.secondary,
 	}
 
 	.radar-attribution {
+		justify-content: center;
 		white-space: normal;
+	}
+
+	.radar-layer-panel,
+	.garden-layer-panel {
+		width: 100%;
 	}
 
 	.radar-map {
