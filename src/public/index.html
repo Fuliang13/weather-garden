@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Weather Garden</title>
   <link rel="stylesheet" href="/assets/vendor/leaflet/leaflet.css">
-  <link rel="stylesheet" href="/style.css?v=20260516-dashboard-v1">
+  <link rel="stylesheet" href="/style.css?v=20260516-dashboard-round-radar-fix">
 </head>
 <body>
   <main class="app-shell">
@@ -25,89 +25,127 @@
       <button type="button" data-panel-target="diagnostic">Diagnostic</button>
     </nav>
 
-    <section data-panel="dashboard">
-      <section id="alertCard" class="card alert-card dashboard-block dashboard-block-rain">
-        <div class="rain-card-main">
-          <div>
+    <section data-panel="dashboard" class="dashboard-panel">
+      <section class="dashboard-weather-layout" aria-label="Dashboard météo locale">
+        <aside class="dashboard-column dashboard-column-left" aria-label="Synthèse météo et conditions locales">
+          <section id="alertCard" class="card alert-card dashboard-block dashboard-block-rain">
             <h2>Synthèse météo immédiate</h2>
             <p id="rainSummary" class="summary">Calcul en cours…</p>
-          </div>
-          <div class="rain-card-status">
-            <p id="rainEta" class="muted"></p>
-            <p id="rainDetail" class="rain-detail"></p>
-          </div>
-        </div>
-        <div id="rainMeta" class="alert-meta"></div>
-      </section>
+            <div id="rainMeta" class="alert-meta"></div>
+          </section>
 
-      <section class="card radar-card dashboard-block dashboard-block-radar">
-        <div class="section-header">
-          <div>
-            <h2>Radar pluie</h2>
-            <p id="radarStatus" class="muted">Chargement radar…</p>
-          </div>
-          <span id="radarAttribution" class="radar-attribution"></span>
-        </div>
-        <div id="radarMap" class="radar-map" role="img" aria-label="Carte radar centrée sur Louvigné-du-Désert"></div>
-        <div id="radarLegend" class="radar-legend" hidden>
-          <ul class="radar-legend-scale" aria-label="Légende de l'intensité des précipitations">
-            <li><span class="radar-swatch radar-light"></span>Pluie faible</li>
-            <li><span class="radar-swatch radar-moderate"></span>Modérée</li>
-            <li><span class="radar-swatch radar-heavy"></span>Forte</li>
-            <li><span class="radar-swatch radar-extreme"></span>Très forte</li>
-          </ul>
-          <p class="radar-legend-note">
-            Les couleurs indiquent l'intensité radar, pas le cumul exact au sol.
-          </p>
-        </div>
-      </section>
+          <article id="stationCard" class="card dashboard-block dashboard-block-station">
+            <h2>Conditions actuelles</h2>
+            <p id="stationSource" class="card-note muted">Station météo</p>
+            <dl class="metrics metrics-wide">
+              <div><dt>Température</dt><dd id="stationTemperature">&mdash;</dd></div>
+              <div><dt>Humidité</dt><dd id="stationHumidity">&mdash;</dd></div>
+              <div><dt>Vent moyen</dt><dd id="stationWind">&mdash;</dd></div>
+              <div><dt>Rafales</dt><dd id="stationGust">&mdash;</dd></div>
+              <div><dt>Pluie observée</dt><dd id="stationRain">&mdash;</dd></div>
+              <div><dt>Fraîcheur</dt><dd id="stationPressure">&mdash;</dd></div>
+              <div class="dashboard-secondary-metric"><dt>UV / solaire</dt><dd id="stationUv">&mdash;</dd></div>
+            </dl>
+          </article>
 
-
-      <section class="grid dashboard-quick-grid">
-        <article id="stationCard" class="card dashboard-block dashboard-block-station">
-          <h2>Observation locale</h2>
-          <p id="stationSource" class="card-note muted">Station météo</p>
-          <dl class="metrics metrics-wide">
-            <div><dt>Température</dt><dd id="stationTemperature">&mdash;</dd></div>
-            <div><dt>Humidité</dt><dd id="stationHumidity">&mdash;</dd></div>
-            <div><dt>Vent</dt><dd id="stationWind">&mdash;</dd></div>
-            <div><dt>Rafales</dt><dd id="stationGust">&mdash;</dd></div>
-            <div><dt>Pluie observée</dt><dd id="stationRain">&mdash;</dd></div>
-            <div><dt>Fraîcheur</dt><dd id="stationPressure">&mdash;</dd></div>
-            <div class="dashboard-secondary-metric"><dt>UV / solaire</dt><dd id="stationUv">&mdash;</dd></div>
-          </dl>
-        </article>
-
-        <article id="forecastCard" class="card dashboard-block dashboard-block-forecast">
-          <h2>Prévision immédiate</h2>
-          <p id="currentSource" class="card-note muted">Modèles météo</p>
-          <dl class="metrics dashboard-forecast-metrics" aria-label="Prévision immédiate modèles">
-            <div><dt>Température</dt><dd id="temperature">&mdash;</dd></div>
-            <div><dt>Humidité</dt><dd id="humidity">&mdash;</dd></div>
-            <div><dt>Vent</dt><dd id="wind">&mdash;</dd></div>
-            <div><dt>Rafales</dt><dd id="gust">&mdash;</dd></div>
-          </dl>
-        </article>
-
-        <article id="differentialCard" class="card dashboard-block dashboard-block-differential">
-          <div class="section-header dashboard-differential-header">
-            <div>
-              <h2>Écart réel / modèles</h2>
-              <p id="differentialSummary" class="card-note muted">Comparaison station et prévision immédiate.</p>
+          <article id="dashboardAlertsCard" class="card dashboard-block dashboard-block-alerts">
+            <h2>Alertes actives</h2>
+            <div id="dashboardAlertsBody" class="dashboard-alerts-body">
+              <strong>Aucune alerte météo ou jardin</strong>
+              <span>Tout est calme pour le moment.</span>
             </div>
-            <span id="differentialBadge" class="differential-badge">?</span>
-          </div>
-          <dl id="differentialMetrics" class="differential-metrics" aria-label="Différentiel station modèles">
-            <div><dt>Température</dt><dd id="temperatureDelta">&mdash;</dd></div>
-            <div><dt>Pluie</dt><dd id="rainDelta">&mdash;</dd></div>
-            <div><dt>Vent</dt><dd id="windDelta">&mdash;</dd></div>
-          </dl>
-        </article>
+            <button type="button" class="secondary dashboard-panel-link" data-panel-target="alerts">Voir toutes les alertes</button>
+          </article>
+        </aside>
 
-        <article id="horizonsCard" class="card dashboard-block dashboard-block-rain-horizons">
-          <h2>Horizons pluie</h2>
-          <div id="horizons" class="horizons"></div>
-        </article>
+        <section class="dashboard-radar-stage" aria-label="Radar pluie observé">
+          <section class="card radar-card dashboard-block dashboard-block-radar">
+            <div class="section-header radar-card-header">
+              <div>
+                <h2>Radar pluie <span class="radar-heading-note">observé</span></h2>
+                <p id="radarStatus" class="muted">Chargement radar…</p>
+              </div>
+              <div class="radar-card-actions" aria-label="Actions radar">
+                <label class="radar-mode-control">
+                  <span>Mode</span>
+                  <select id="radarModeSelect">
+                    <option value="auto">Zoom auto</option>
+                    <option value="manual">Manuel</option>
+                  </select>
+                </label>
+                <button id="radarRefreshButton" type="button" class="secondary">Actualiser</button>
+              </div>
+            </div>
+            <div class="radar-meta-strip" aria-label="État radar">
+              <span><strong>Source</strong><span id="radarSourceLabel">&mdash;</span></span>
+              <span><strong>Validité</strong><span id="radarValidity">&mdash;</span></span>
+              <span><strong>Fraîcheur</strong><span id="radarFreshness">&mdash;</span></span>
+              <span><strong>Rayon</strong><span id="radarRadiusLabel">&mdash;</span></span>
+              <span id="radarFallbackLabel" class="radar-fallback-label" hidden>Fallback</span>
+            </div>
+            <div class="radar-map-shell">
+              <div class="radar-map-frame">
+                <div id="radarMap" class="radar-map" role="img" aria-label="Radar pluie circulaire centré sur Louvigné-du-Désert"></div>
+                <div id="radarDistanceRings" class="radar-distance-rings" aria-hidden="true"></div>
+              </div>
+            </div>
+            <div id="radarLegend" class="radar-legend" hidden>
+              <ul class="radar-legend-scale" aria-label="Légende de l'intensité des précipitations">
+                <li><span class="radar-swatch radar-light"></span>Pluie faible</li>
+                <li><span class="radar-swatch radar-moderate"></span>Modérée</li>
+                <li><span class="radar-swatch radar-heavy"></span>Forte</li>
+                <li><span class="radar-swatch radar-extreme"></span>Très forte</li>
+              </ul>
+              <p class="radar-legend-note">
+                Les couleurs indiquent l'intensité radar, pas le cumul exact au sol.
+              </p>
+              <span id="radarAttribution" class="radar-attribution"></span>
+            </div>
+          </section>
+
+          <section class="radar-zoom-status" aria-label="État du zoom radar">
+            <span id="radarZoomIcon" aria-hidden="true">↻</span>
+            <p>
+              <strong id="radarZoomStatus">Zoom automatique activé</strong>
+              <span id="radarZoomMessage">Recentrage et ajustement du rayon selon la pluie la plus proche.</span>
+            </p>
+            <button id="radarZoomToggleButton" type="button" class="secondary">Désactiver</button>
+          </section>
+        </section>
+
+        <aside class="dashboard-column dashboard-column-right" aria-label="Pluie prévue, sources et contrôle radar">
+          <article class="card dashboard-block dashboard-block-next-rain">
+            <h2>Prochaine pluie prévue</h2>
+            <p id="rainEta" class="next-rain-eta muted">&mdash;</p>
+            <p id="rainDetail" class="rain-detail">Calcul en cours…</p>
+            <dl class="next-rain-metrics">
+              <div><dt>Score pluie</dt><dd id="rainNextScore">&mdash;</dd></div>
+              <div><dt>Intensité max prévue</dt><dd id="rainNextIntensity">&mdash;</dd></div>
+              <div><dt>Cumul prévu</dt><dd id="rainNextAmount">&mdash;</dd></div>
+              <div><dt>Confiance</dt><dd id="rainNextConfidence">&mdash;</dd></div>
+            </dl>
+          </article>
+
+          <article id="horizonsCard" class="card dashboard-block dashboard-block-rain-horizons">
+            <h2>Aperçu pluie 2h</h2>
+            <div id="horizons" class="horizons"></div>
+          </article>
+
+          <article class="card dashboard-block dashboard-block-sources">
+            <h2>Sources météo</h2>
+            <ul id="dashboardSources" class="sources dashboard-sources"></ul>
+          </article>
+
+          <article class="card dashboard-block dashboard-block-radar-control">
+            <h2>Contrôle radar</h2>
+            <dl class="radar-control-list">
+              <div><dt>Mode</dt><dd id="radarControlMode">Auto recommandé</dd></div>
+              <div><dt>Rayon actuel</dt><dd id="radarControlRadius">&mdash;</dd></div>
+              <div><dt>Distance pluie</dt><dd id="radarNearestRain">Indisponible</dd></div>
+              <div><dt>Source affichée</dt><dd id="radarControlSource">&mdash;</dd></div>
+            </dl>
+          </article>
+        </aside>
       </section>
 
       <section id="forecastComparisonCard" class="card forecast-comparison-card dashboard-block dashboard-block-forecast-comparison">
@@ -367,6 +405,6 @@
   </main>
 
   <script src="/assets/vendor/leaflet/leaflet.js"></script>
-  <script src="/app.js?v=20260516-dashboard-v1" type="module"></script>
+  <script src="/app.js?v=20260516-dashboard-round-radar-fix" type="module"></script>
 </body>
 </html>

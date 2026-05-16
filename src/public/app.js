@@ -61,6 +61,8 @@ const state = {
   radarRainLayer: null,
   radarNativeLayer: null,
   radarMarker: null,
+  radarZoomMode: "auto",
+  radarRadiusKm: null,
   refreshTimer: null,
   countdownTimer: null,
   nextRefreshAt: null,
@@ -135,10 +137,31 @@ const els = {
   gardenAlertsTitle: document.querySelector("#gardenAlertsTitle"),
   gardenAlertsSummary: document.querySelector("#gardenAlertsSummary"),
   gardenAlertsList: document.querySelector("#gardenAlertsList"),
+  dashboardAlertsBody: document.querySelector("#dashboardAlertsBody"),
+  rainNextScore: document.querySelector("#rainNextScore"),
+  rainNextIntensity: document.querySelector("#rainNextIntensity"),
+  rainNextAmount: document.querySelector("#rainNextAmount"),
+  rainNextConfidence: document.querySelector("#rainNextConfidence"),
   radarStatus: document.querySelector("#radarStatus"),
   radarMap: document.querySelector("#radarMap"),
   radarLegend: document.querySelector("#radarLegend"),
   radarAttribution: document.querySelector("#radarAttribution"),
+  radarModeSelect: document.querySelector("#radarModeSelect"),
+  radarRefreshButton: document.querySelector("#radarRefreshButton"),
+  radarZoomToggleButton: document.querySelector("#radarZoomToggleButton"),
+  radarSourceLabel: document.querySelector("#radarSourceLabel"),
+  radarValidity: document.querySelector("#radarValidity"),
+  radarFreshness: document.querySelector("#radarFreshness"),
+  radarRadiusLabel: document.querySelector("#radarRadiusLabel"),
+  radarFallbackLabel: document.querySelector("#radarFallbackLabel"),
+  radarDistanceRings: document.querySelector("#radarDistanceRings"),
+  radarZoomStatus: document.querySelector("#radarZoomStatus"),
+  radarZoomMessage: document.querySelector("#radarZoomMessage"),
+  radarControlMode: document.querySelector("#radarControlMode"),
+  radarControlRadius: document.querySelector("#radarControlRadius"),
+  radarNearestRain: document.querySelector("#radarNearestRain"),
+  radarControlSource: document.querySelector("#radarControlSource"),
+  dashboardSources: document.querySelector("#dashboardSources"),
   sources: document.querySelector("#sources"),
   updatedAt: document.querySelector("#updatedAt"),
   publicJsonLink: document.querySelector("#publicJsonLink"),
@@ -191,6 +214,18 @@ els.deleteGardenEntityButton?.addEventListener("click", () => {
 els.duplicateGardenEntityButton?.addEventListener("click", duplicateSelectedGardenEntity);
 els.importKmlButton?.addEventListener("click", chooseGardenKmlFile);
 els.exportKmlButton?.addEventListener("click", exportGardenKml);
+els.radarRefreshButton?.addEventListener("click", () => loadStatus(true));
+els.radarModeSelect?.addEventListener("change", () => {
+  state.radarZoomMode = els.radarModeSelect.value === "manual" ? "manual" : "auto";
+  renderRadar(state.status?.radar, state.status?.location, state.status?.rain || {});
+});
+els.radarZoomToggleButton?.addEventListener("click", () => {
+  state.radarZoomMode = state.radarZoomMode === "auto" ? "manual" : "auto";
+  if (els.radarModeSelect) {
+    els.radarModeSelect.value = state.radarZoomMode;
+  }
+  renderRadar(state.status?.radar, state.status?.location, state.status?.rain || {});
+});
 document.querySelectorAll("[data-garden-action]").forEach((button) => {
   button.addEventListener("click", handleGardenAction);
 });
@@ -521,13 +556,11 @@ function renderStatus(status) {
   els.alertCard.dataset.level = noSignificantRain ? "none" : rain.presentationLevel || rain.alertLevel;
   els.alertCard.dataset.quiet = String(noSignificantRain);
   els.rainSummary.textContent = buildDashboardRainHeadline(rain) || rain.headline || rain.alertLabel;
-  els.rainEta.textContent = noSignificantRain ? "" : buildRainEtaText(rain);
-  els.rainEta.hidden = noSignificantRain || !els.rainEta.textContent;
-  els.rainDetail.textContent = noSignificantRain ? "" : rain.detail || "";
-  els.rainDetail.hidden = noSignificantRain || !els.rainDetail.textContent;
   const immediateForecast = getImmediateModelForecast(status.forecastComparison);
   const stationObservation = status.stationObservation || status.observation?.station || null;
   renderRainMeta(rain, stationObservation, immediateForecast, status.forecastComparison);
+  renderNextRain(rain, status.forecastComparison);
+  renderDashboardAlerts(status);
   renderStationObservation(stationObservation);
   renderCurrentForecast(immediateForecast);
   renderDifferential(stationObservation, immediateForecast);
@@ -536,11 +569,109 @@ function renderStatus(status) {
   renderGarden(rain.garden, status.garden);
   renderGardenWorkspace(getGardenEntities(status), status.location);
   renderGardenAlerts(status.garden?.alerts);
-  renderRadar(status.radar, status.location);
+  renderRadar(status.radar, status.location, rain);
   renderSources(status.sources || []);
   renderSettings(status.settings || {});
   renderDebugLinks();
   els.updatedAt.textContent = `Dernière mise à jour : ${formatDate(status.updatedAt)}`;
+}
+
+function renderNextRain(rain, comparison) {
+  const primaryHorizon = pickDashboardRainHorizon(rain?.horizons);
+  const wgf = getImmediateWgfForecast(comparison);
+  const score = Number.isFinite(primaryHorizon?.score) ? `${Math.round(primaryHorizon.score * 100)} %` : "—";
+  const confidence = formatWgfConfidence(wgf?.confidence || primaryHorizon?.confidence) || "—";
+
+  if (rain?.activeNow) {
+    els.rainEta.textContent = "En cours";
+    els.rainDetail.textContent = rain.detail || "Pluie détectée actuellement.";
+  } else if (Number.isFinite(rain?.etaMinutes)) {
+    els.rainEta.textContent = `${Math.max(0, Math.round(rain.etaMinutes))} min`;
+    els.rainDetail.textContent = buildRainEtaText(rain) || rain.detail || "Arrivée à confirmer selon les prochaines données.";
+  } else if (isNoSignificantRain(rain)) {
+    els.rainEta.textContent = "Pas de pluie proche";
+    els.rainDetail.textContent = Number.isFinite(rain?.noRainWindowMinutes)
+      ? `Fenêtre sèche estimée : ${formatHumanDuration(Math.round(rain.noRainWindowMinutes))}.`
+      : "Aucune arrivée significative détectée dans les données immédiates.";
+  } else {
+    els.rainEta.textContent = "—";
+    els.rainDetail.textContent = "Pluie à confirmer selon les prochaines données.";
+  }
+
+  els.rainEta.hidden = false;
+  els.rainDetail.hidden = false;
+  els.rainNextScore.textContent = score;
+  els.rainNextIntensity.textContent = formatDashboardMetric(primaryHorizon?.intensityMmPerHour, formatRainRate);
+  els.rainNextAmount.textContent = formatDashboardMetric(primaryHorizon?.precipitationMm, formatRain);
+  els.rainNextConfidence.textContent = confidence;
+}
+
+function formatDashboardMetric(value, formatter) {
+  const formatted = formatter(value);
+  return formatted === "?" ? "—" : formatted;
+}
+
+function pickDashboardRainHorizon(horizons) {
+  const items = Array.isArray(horizons) ? horizons : [];
+  return items.find((item) => item.minutes === 30)
+    || items.find((item) => item.minutes === 60)
+    || items.find((item) => item.minutes === 120)
+    || items[0]
+    || null;
+}
+
+function renderDashboardAlerts(status) {
+  if (!els.dashboardAlertsBody) {
+    return;
+  }
+
+  const items = [];
+  const rain = status.rain || {};
+  const gardenAlerts = Array.isArray(status.garden?.alerts) ? status.garden.alerts : [];
+
+  if (!isNoSignificantRain(rain) && rain.alertLevel && rain.alertLevel !== "none") {
+    items.push({
+      level: rain.presentationLevel || rain.alertLevel,
+      title: rain.alertLabel || rain.headline || "Pluie à surveiller",
+      detail: rain.detail || buildRainEtaText(rain) || "Signal pluie actif."
+    });
+  }
+
+  gardenAlerts
+    .filter((alert) => alert?.level && alert.level !== "info")
+    .slice(0, 2)
+    .forEach((alert) => {
+      items.push({
+        level: alert.level,
+        title: alert.headline || alert.type || "Alerte jardin",
+        detail: Array.isArray(alert.details) && alert.details.length ? alert.details.join(" · ") : alert.advice || "À vérifier dans l'onglet Alertes."
+      });
+    });
+
+  els.dashboardAlertsBody.innerHTML = "";
+
+  if (!items.length) {
+    const title = document.createElement("strong");
+    const detail = document.createElement("span");
+    title.textContent = "Aucune alerte météo ou jardin";
+    detail.textContent = "Tout est calme pour le moment.";
+    els.dashboardAlertsBody.dataset.state = "none";
+    els.dashboardAlertsBody.append(title, detail);
+    return;
+  }
+
+  els.dashboardAlertsBody.dataset.state = "active";
+  items.forEach((item) => {
+    const row = document.createElement("span");
+    const title = document.createElement("strong");
+    const detail = document.createElement("span");
+    row.className = "dashboard-alert-row";
+    row.dataset.level = item.level;
+    title.textContent = item.title;
+    detail.textContent = item.detail;
+    row.append(title, detail);
+    els.dashboardAlertsBody.append(row);
+  });
 }
 
 function renderRainMeta(rain, station, current, comparison) {
@@ -639,13 +770,13 @@ function renderStationObservation(station) {
     els.stationCard.hidden = false;
     els.stationCard.dataset.stale = "true";
     els.stationSource.textContent = "Observation locale indisponible";
-    els.stationTemperature.textContent = "?";
-    els.stationHumidity.textContent = "?";
-    els.stationWind.textContent = "?";
-    els.stationGust.textContent = "?";
-    els.stationPressure.textContent = "?";
-    els.stationRain.textContent = "?";
-    els.stationUv.textContent = "?";
+    els.stationTemperature.textContent = "—";
+    els.stationHumidity.textContent = "—";
+    els.stationWind.textContent = "—";
+    els.stationGust.textContent = "—";
+    els.stationPressure.textContent = "Indisponible";
+    els.stationRain.textContent = "—";
+    els.stationUv.textContent = "—";
     return;
   }
 
@@ -663,6 +794,10 @@ function renderStationObservation(station) {
 }
 
 function renderCurrentForecast(current) {
+  if (!els.currentSource || !els.temperature || !els.humidity || !els.wind || !els.gust) {
+    return;
+  }
+
   els.currentSource.textContent = current?.sourceLabel || "Prévision modèles - AROME / MET Norway";
   els.temperature.textContent = formatTemperature(current?.temperatureC);
   els.humidity.textContent = formatValue(current?.humidityPct, "%");
@@ -734,9 +869,9 @@ function renderDifferential(station, current) {
     els.differentialCard.dataset.state = "unavailable";
     els.differentialBadge.textContent = "À compléter";
     els.differentialSummary.textContent = "Station ou prévision immédiate indisponible.";
-    els.temperatureDelta.textContent = "?";
-    els.rainDelta.textContent = "?";
-    els.windDelta.textContent = "?";
+    els.temperatureDelta.textContent = "—";
+    els.rainDelta.textContent = "—";
+    els.windDelta.textContent = "—";
     return;
   }
 
@@ -821,11 +956,6 @@ function formatRainDifferential(observedRainRate, forecastRain) {
 function renderHorizons(horizons, noSignificantRain) {
   els.horizons.innerHTML = "";
 
-  if (noSignificantRain) {
-    els.horizonsCard.hidden = true;
-    return;
-  }
-
   const compactHorizons = getCompactRainHorizons(horizons);
   els.horizonsCard.hidden = !compactHorizons.length;
 
@@ -844,7 +974,7 @@ function renderHorizons(horizons, noSignificantRain) {
 }
 
 function getCompactRainHorizons(horizons) {
-  const preferredMinutes = [30, 60, 120, 360];
+  const preferredMinutes = [30, 60, 120];
   const byMinutes = new Map((horizons || []).map((item) => [item.minutes, item]));
   const selected = preferredMinutes.map((minutes) => byMinutes.get(minutes)).filter(Boolean);
 
@@ -2481,29 +2611,217 @@ function renderGardenAlerts(alerts) {
   });
 }
 
-function renderRadar(radar, location) {
-  const rainViewer = radar?.rainViewer;
-  const meteoFrance = radar?.meteoFrance;
-  const nativeLayer = meteoFrance?.nativeLayer?.ok ? meteoFrance.nativeLayer : null;
-  const tileUrlTemplate = nativeLayer ? null : getRainViewerTileUrl(rainViewer);
+function renderRadar(radar, location, rain = {}) {
+  const model = buildRadarDisplayModel(radar, rain);
 
-  if (nativeLayer) {
-    els.radarStatus.textContent = `${uiText("@{%Radar Météo-France natif affiché%}")}${meteoFrance.validityTime ? ` · ${uiText("@{%donnée radar du%}")} ${formatDate(meteoFrance.validityTime)}` : ""}.`;
-  } else if (rainViewer?.ok) {
-    els.radarStatus.textContent = buildRainViewerFallbackText(meteoFrance, rainViewer);
-  } else if (meteoFrance?.ok) {
-    els.radarStatus.textContent = `${uiText("@{%Radar Météo-France disponible, mais couche native non exploitable%}")}${meteoFrance.diagnostics?.fallbackReason ? ` · ${meteoFrance.diagnostics.fallbackReason}` : ""}.`;
+  if (model.nativeLayer) {
+    els.radarStatus.textContent = `${uiText("@{%Radar Météo-France natif affiché%}")}${model.validityTime ? ` · ${uiText("@{%donnée radar du%}")} ${formatDate(model.validityTime)}` : ""}.`;
+  } else if (model.rainViewerTileUrl) {
+    els.radarStatus.textContent = buildRainViewerFallbackText(radar?.meteoFrance, radar?.rainViewer);
+  } else if (radar?.meteoFrance?.ok) {
+    els.radarStatus.textContent = `${uiText("@{%Radar Météo-France disponible, mais couche native non exploitable%}")}${radar.meteoFrance.diagnostics?.fallbackReason ? ` · ${radar.meteoFrance.diagnostics.fallbackReason}` : ""}.`;
   } else {
     els.radarStatus.textContent = uiText("@{%Aucun radar disponible pour le moment.%}");
   }
 
-  renderRadarMap(location, { nativeLayer, rainViewerTileUrl: tileUrlTemplate });
+  renderRadarMap(location, {
+    nativeLayer: model.nativeLayer,
+    rainViewerTileUrl: model.rainViewerTileUrl,
+    radiusKm: model.radiusKm
+  });
+  renderRadarMetadata(model);
 
-  els.radarLegend.hidden = !nativeLayer && !tileUrlTemplate;
-  els.radarAttribution.textContent = nativeLayer ? uiText("@{%Météo-France · OpenStreetMap%}") : (tileUrlTemplate ? "RainViewer · OpenStreetMap" : "");
+  els.radarLegend.hidden = !model.nativeLayer && !model.rainViewerTileUrl;
+  els.radarAttribution.textContent = model.nativeLayer ? uiText("@{%Météo-France · OpenStreetMap%}") : (model.rainViewerTileUrl ? "RainViewer · OpenStreetMap" : "");
 }
 
-function renderRadarMap(location, { nativeLayer, rainViewerTileUrl }) {
+function buildRadarDisplayModel(radar, rain) {
+  const rainViewer = radar?.rainViewer;
+  const meteoFrance = radar?.meteoFrance;
+  const nativeLayer = meteoFrance?.nativeLayer?.ok ? meteoFrance.nativeLayer : null;
+  const rainViewerTileUrl = nativeLayer ? null : getRainViewerTileUrl(rainViewer);
+  const sourceStatus = nativeLayer ? findSourceStatus("meteofrance-radar") : rainViewerTileUrl ? findSourceStatus("rainviewer") : findSourceStatus("meteofrance-radar");
+  const nearestRainDistanceKm = getNearestRainDistanceKm(radar, rain);
+  const targetRadiusKm = getRadarTargetRadiusKm(nearestRainDistanceKm, rain);
+  const radiusKm = getSmoothedRadarRadiusKm(targetRadiusKm);
+
+  return {
+    nativeLayer,
+    rainViewerTileUrl,
+    sourceLabel: nativeLayer ? "Météo-France Radar" : rainViewerTileUrl ? "RainViewer fallback" : "Indisponible",
+    validityTime: nativeLayer?.validityTime || meteoFrance?.validityTime || rainViewer?.frameTime || rainViewer?.generatedAt || null,
+    freshnessLabel: formatRadarFreshness(sourceStatus, nativeLayer || rainViewer),
+    fallbackLabel: rainViewerTileUrl ? "Fallback RainViewer affiché" : "",
+    nearestRainDistanceKm,
+    radiusKm
+  };
+}
+
+function renderRadarMetadata(model) {
+  const radiusLabel = `${Math.round(model.radiusKm)} km`;
+  const modeLabel = state.radarZoomMode === "auto" ? "Auto recommandé" : "Manuel";
+  const distanceLabel = Number.isFinite(model.nearestRainDistanceKm) ? `${Math.round(model.nearestRainDistanceKm)} km` : "Distance pluie indisponible";
+  const autoMessage = Number.isFinite(model.nearestRainDistanceKm)
+    ? "Zoom automatique activé : recentrage et ajustement du rayon selon la pluie la plus proche."
+    : "Zoom automatique activé : distance pluie indisponible, rayon ajusté prudemment avec les signaux disponibles.";
+
+  els.radarSourceLabel.textContent = model.sourceLabel;
+  els.radarValidity.textContent = model.validityTime ? formatDate(model.validityTime) : "—";
+  els.radarFreshness.textContent = model.freshnessLabel;
+  els.radarRadiusLabel.textContent = radiusLabel;
+  els.radarFallbackLabel.hidden = !model.fallbackLabel;
+  els.radarFallbackLabel.textContent = model.fallbackLabel;
+  els.radarZoomStatus.textContent = state.radarZoomMode === "auto" ? "Zoom automatique activé" : "Zoom manuel";
+  els.radarZoomMessage.textContent = state.radarZoomMode === "auto" ? autoMessage : "Zoom automatique désactivé : la carte conserve le cadrage utilisateur.";
+  els.radarZoomToggleButton.textContent = state.radarZoomMode === "auto" ? "Désactiver" : "Réactiver";
+  els.radarModeSelect.value = state.radarZoomMode;
+  els.radarControlMode.textContent = modeLabel;
+  els.radarControlRadius.textContent = radiusLabel;
+  els.radarNearestRain.textContent = distanceLabel;
+  els.radarControlSource.textContent = model.sourceLabel;
+  renderRadarDistanceRings(model.radiusKm);
+}
+
+function renderRadarDistanceRings(radiusKm) {
+  if (!els.radarDistanceRings) {
+    return;
+  }
+
+  els.radarDistanceRings.innerHTML = "";
+  buildRadarRingLabels(radiusKm).forEach((distanceKm) => {
+    const ring = document.createElement("span");
+    const label = document.createElement("strong");
+    const size = Math.max(14, Math.min(100, distanceKm / radiusKm * 100));
+    ring.className = "radar-distance-ring";
+    ring.style.setProperty("--ring-size", `${size}%`);
+    label.textContent = `${Math.round(distanceKm)} km`;
+    ring.append(label);
+    els.radarDistanceRings.append(ring);
+  });
+}
+
+function buildRadarRingLabels(radiusKm) {
+  if (radiusKm <= 40) {
+    return [10, 20, 30, 40];
+  }
+
+  if (radiusKm <= 80) {
+    return [20, 40, 60, 80];
+  }
+
+  if (radiusKm <= 120) {
+    return [20, 40, 80, 100, 120];
+  }
+
+  if (radiusKm <= 160) {
+    return [40, 80, 120, 160];
+  }
+
+  return [50, 100, 160, Math.round(radiusKm)];
+}
+
+function getNearestRainDistanceKm(radar, rain) {
+  const candidates = [
+    radar?.nearestRainDistanceKm,
+    radar?.distanceToNearestRainKm,
+    radar?.meteoFrance?.nearestRainDistanceKm,
+    radar?.rainViewer?.nearestRainDistanceKm,
+    rain?.nearestRainDistanceKm,
+    rain?.distanceToNearestRainKm
+  ];
+
+  return candidates.find((value) => Number.isFinite(value)) ?? null;
+}
+
+function getRadarTargetRadiusKm(nearestRainDistanceKm, rain) {
+  if (Number.isFinite(nearestRainDistanceKm)) {
+    if (nearestRainDistanceKm <= 20) {
+      return 40;
+    }
+
+    if (nearestRainDistanceKm <= 40) {
+      return 60;
+    }
+
+    if (nearestRainDistanceKm <= 80) {
+      return 100;
+    }
+
+    if (nearestRainDistanceKm <= 140) {
+      return 160;
+    }
+
+    return 220;
+  }
+
+  if (rain?.activeNow) {
+    return 80;
+  }
+
+  if (Number.isFinite(rain?.etaMinutes)) {
+    if (rain.etaMinutes <= 30) {
+      return 80;
+    }
+
+    if (rain.etaMinutes <= 120) {
+      return 120;
+    }
+
+    return 160;
+  }
+
+  if (isNoSignificantRain(rain)) {
+    return 220;
+  }
+
+  return 160;
+}
+
+function getSmoothedRadarRadiusKm(targetRadiusKm) {
+  if (state.radarZoomMode !== "auto") {
+    return state.radarRadiusKm || targetRadiusKm;
+  }
+
+  if (!Number.isFinite(state.radarRadiusKm)) {
+    state.radarRadiusKm = targetRadiusKm;
+    return state.radarRadiusKm;
+  }
+
+  const maxStepKm = 40;
+  const delta = targetRadiusKm - state.radarRadiusKm;
+  state.radarRadiusKm += Math.max(-maxStepKm, Math.min(maxStepKm, delta));
+  return state.radarRadiusKm;
+}
+
+function formatRadarFreshness(source, payload) {
+  if (source?.state === "fresh") {
+    return "OK";
+  }
+
+  if (source?.state === "stale") {
+    return "Ancien";
+  }
+
+  if (source?.state === "unavailable") {
+    return "Indisponible";
+  }
+
+  if (Number.isFinite(source?.freshnessMinutes)) {
+    return formatDuration(source.freshnessMinutes);
+  }
+
+  if (payload?.fetchedAt || payload?.frameTime || payload?.validityTime) {
+    return "À confirmer";
+  }
+
+  return "—";
+}
+
+function findSourceStatus(id) {
+  return (state.status?.sources || []).find((source) => source.id === id) || null;
+}
+
+function renderRadarMap(location, { nativeLayer, rainViewerTileUrl, radiusKm }) {
   if (!els.radarMap) {
     return;
   }
@@ -2526,9 +2844,11 @@ function renderRadarMap(location, { nativeLayer, rainViewerTileUrl }) {
   ensureRadarMap(center, location);
   updateNativeRadarLayer(nativeLayer);
   updateRainLayer(rainViewerTileUrl);
+  updateRadarViewport(center, radiusKm);
 
   window.setTimeout(() => {
     state.radarMap.invalidateSize();
+    updateRadarViewport(center, radiusKm);
   }, 0);
 }
 
@@ -2536,8 +2856,9 @@ function ensureRadarMap(center, location) {
   if (!state.radarMap) {
     state.radarMap = window.L.map(els.radarMap, {
       zoomControl: true,
-      scrollWheelZoom: false
-    }).setView(center, 10);
+      scrollWheelZoom: false,
+      attributionControl: true
+    }).setView(center, 9);
 
     state.radarBaseLayer = window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
@@ -2546,13 +2867,36 @@ function ensureRadarMap(center, location) {
 
     state.radarMarker = window.L.marker(center).addTo(state.radarMap);
   } else {
-    state.radarMap.setView(center, state.radarMap.getZoom() || 10);
     state.radarMarker.setLatLng(center);
   }
 
   const markerContent = document.createElement("strong");
   markerContent.textContent = location?.name || "Position météo";
   state.radarMarker.bindPopup(markerContent);
+}
+
+function updateRadarViewport(center, radiusKm) {
+  if (!state.radarMap || state.radarZoomMode !== "auto" || !Number.isFinite(radiusKm)) {
+    return;
+  }
+
+  state.radarMap.fitBounds(buildBoundsFromRadius(center, radiusKm), {
+    animate: false,
+    padding: [6, 6]
+  });
+}
+
+function buildBoundsFromRadius(center, radiusKm) {
+  const latitude = center[0];
+  const longitude = center[1];
+  const latDelta = radiusKm / 111;
+  const cosLatitude = Math.max(0.18, Math.cos(latitude * Math.PI / 180));
+  const lngDelta = radiusKm / (111 * cosLatitude);
+
+  return [
+    [latitude - latDelta, longitude - lngDelta],
+    [latitude + latDelta, longitude + lngDelta]
+  ];
 }
 
 function updateNativeRadarLayer(nativeLayer) {
@@ -2592,27 +2936,37 @@ function updateRainLayer(tileUrlTemplate) {
 }
 
 function renderSources(sources) {
-  els.sources.innerHTML = "";
+  const targets = [els.dashboardSources, els.sources].filter(Boolean);
+
+  targets.forEach((target) => {
+    target.innerHTML = "";
+  });
 
   sources.forEach((source) => {
-    const item = document.createElement("li");
-    const status = getSourceStatus(source);
-    const badge = document.createElement("span");
-    const body = document.createElement("span");
-    const label = document.createElement("strong");
-    const meta = document.createElement("span");
-
-    item.className = `source-row source-${status.level}`;
-    badge.className = "source-badge";
-    badge.textContent = status.label;
-    body.className = "source-body";
-    label.textContent = source.label;
-    meta.textContent = buildSourceMeta(source, status);
-
-    body.append(label, meta);
-    item.append(badge, body);
-    els.sources.append(item);
+    targets.forEach((target) => {
+      target.append(buildSourceRow(source));
+    });
   });
+}
+
+function buildSourceRow(source) {
+  const item = document.createElement("li");
+  const status = getSourceStatus(source);
+  const badge = document.createElement("span");
+  const body = document.createElement("span");
+  const label = document.createElement("strong");
+  const meta = document.createElement("span");
+
+  item.className = `source-row source-${status.level}`;
+  badge.className = "source-badge";
+  badge.textContent = status.label;
+  body.className = "source-body";
+  label.textContent = source.label;
+  meta.textContent = buildSourceMeta(source, status);
+
+  body.append(label, meta);
+  item.append(badge, body);
+  return item;
 }
 
 function renderSettings(settings) {
