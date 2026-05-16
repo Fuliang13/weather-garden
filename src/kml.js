@@ -94,6 +94,7 @@ function placemarkToGardenEntities(placemark, styles, options, report) {
         placemarkId: node.attrs.id || "",
         folder,
         styleUrl,
+        style,
         geometryType: geometry.type,
         visibility: childText(node, "visibility"),
         extendedData: readExtendedData(node),
