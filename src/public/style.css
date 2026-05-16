@@ -1560,36 +1560,53 @@ body[data-active-panel="garden"] .app-shell {
 
 .sources {
 	display: grid;
-	gap: 0.55rem;
+	gap: 0;
 	margin: 0;
 	padding: 0;
 	list-style: none;
 }
 
 .source-row {
-	display: flex;
-	align-items: flex-start;
-	gap: 0.65rem;
-	border: 1px solid var(--border);
-	border-radius: 1rem;
-	background: var(--soft);
-	padding: 0.7rem;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto auto;
+	align-items: center;
+	gap: 0.55rem;
+	min-height: 2.55rem;
+	border: 0;
+	border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, white);
+	border-radius: 0;
+	background: transparent;
+	padding: 0.48rem 0;
+}
+
+.source-row:last-child {
+	border-bottom: 0;
 }
 
 .source-badge {
-	min-width: 2.5rem;
+	display: inline-flex;
+	min-width: 1.9rem;
+	min-height: 1.25rem;
+	align-items: center;
+	justify-content: center;
 	border-radius: 999px;
 	background: var(--muted);
 	color: white;
-	font-size: 0.75rem;
-	font-weight: 800;
+	font-size: 0.64rem;
+	font-weight: 820;
 	line-height: 1;
-	padding: 0.35rem 0.45rem;
+	padding: 0.22rem 0.45rem;
 	text-align: center;
+	white-space: nowrap;
 }
 
 .source-ok .source-badge {
 	background: var(--accent);
+}
+
+.source-stale .source-badge {
+	background: var(--warn);
+	color: #3d2b09;
 }
 
 .source-ko .source-badge {
@@ -1602,12 +1619,34 @@ body[data-active-panel="garden"] .app-shell {
 
 .source-body {
 	display: grid;
-	gap: 0.15rem;
+	min-width: 0;
+	gap: 0.12rem;
 }
 
-.source-body span {
-	color: var(--muted);
+.source-body strong {
+	overflow: hidden;
+	color: var(--text);
 	font-size: 0.9rem;
+	font-weight: 720;
+	line-height: 1.18;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.source-body span,
+.source-age {
+	color: var(--muted);
+	font-size: 0.74rem;
+	line-height: 1.15;
+}
+
+.source-age {
+	justify-self: end;
+	white-space: nowrap;
+}
+
+.source-meta:empty {
+	display: none;
 }
 
 
@@ -1664,8 +1703,9 @@ button.secondary,
 		grid-template-columns: repeat(4, minmax(0, 1fr));
 	}
 
-	.sources {
+	.sources:not(.dashboard-sources) {
 		grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+		gap: 0 1rem;
 	}
 
 	.radar-map {
@@ -2856,25 +2896,29 @@ body[data-active-panel="dashboard"] .panel-nav {
 .dashboard-sources {
 	display: grid;
 	grid-template-columns: 1fr;
-	gap: 0.48rem;
+	gap: 0;
 }
 
 .dashboard-sources .source-row {
-	grid-template-columns: minmax(0, 1fr) auto;
-	padding: 0.48rem 0;
-}
-
-.dashboard-sources .source-badge {
-	order: 2;
-	align-self: center;
+	grid-template-columns: minmax(0, 1fr) auto auto;
+	gap: 0.52rem;
+	padding: 0.44rem 0;
 }
 
 .dashboard-sources .source-body span {
 	overflow: hidden;
-	max-width: 18rem;
-	font-size: 0.76rem;
+	max-width: 16rem;
+	font-size: 0.72rem;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.dashboard-sources .source-age {
+	font-size: 0.7rem;
+}
+
+.dashboard-sources .source-badge {
+	align-self: center;
 }
 
 .dashboard-block-radar-control {

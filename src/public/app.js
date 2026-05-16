@@ -38,6 +38,24 @@ const WEATHER_ICON_FILES = {
   unavailable: "weather-unavailable.svg"
 };
 
+const SOURCE_DISPLAY_ORDER = new Map([
+  ["ecowitt", 10],
+  ["station-locale", 10],
+  ["open-meteo-arome", 20],
+  ["met-norway", 30],
+  ["meteofrance-radar", 40],
+  ["rainviewer", 50]
+]);
+
+const SOURCE_DISPLAY_LABELS = {
+  ecowitt: "Station locale",
+  "station-locale": "Station locale",
+  "open-meteo-arome": "Prévision AROME",
+  "met-norway": "MET Norway",
+  "meteofrance-radar": "Radar Météo-France",
+  rainviewer: "RainViewer (fallback)"
+};
+
 const state = {
   status: null,
   gardenState: null,
@@ -2939,35 +2957,49 @@ function updateRainLayer(tileUrlTemplate) {
 
 function renderSources(sources) {
   const targets = [els.dashboardSources, els.sources].filter(Boolean);
+  const orderedSources = sortSourcesForDisplay(sources);
 
   targets.forEach((target) => {
     target.innerHTML = "";
   });
 
-  sources.forEach((source) => {
+  orderedSources.forEach((source) => {
     targets.forEach((target) => {
       target.append(buildSourceRow(source));
     });
   });
 }
 
+function sortSourcesForDisplay(sources) {
+  return [...sources].sort((left, right) => getSourceDisplayOrder(left) - getSourceDisplayOrder(right));
+}
+
+function getSourceDisplayOrder(source) {
+  return SOURCE_DISPLAY_ORDER.get(source?.id) ?? SOURCE_DISPLAY_ORDER.get(source?.source) ?? 100;
+}
+
 function buildSourceRow(source) {
   const item = document.createElement("li");
   const status = getSourceStatus(source);
-  const badge = document.createElement("span");
   const body = document.createElement("span");
   const label = document.createElement("strong");
   const meta = document.createElement("span");
+  const age = document.createElement("span");
+  const badge = document.createElement("span");
 
   item.className = `source-row source-${status.level}`;
+  item.dataset.sourceId = source.id || source.source || "unknown";
+  body.className = "source-body";
+  label.textContent = formatSourceDisplayLabel(source);
+  meta.className = "source-meta";
+  meta.textContent = buildSourceMeta(source, status);
+  age.className = "source-age";
+  age.textContent = formatSourceAge(source, status);
   badge.className = "source-badge";
   badge.textContent = status.label;
-  body.className = "source-body";
-  label.textContent = source.label;
-  meta.textContent = buildSourceMeta(source, status);
 
   body.append(label, meta);
-  item.append(badge, body);
+  item.append(body, age, badge);
   return item;
 }
 
@@ -3059,29 +3091,71 @@ function getSourceStatus(source) {
     return { label: "OFF", level: "off" };
   }
 
+  if (source.state === "stale" || source.stale) {
+    return { label: "Ancien", level: "stale" };
+  }
+
   return source.ok ? { label: "OK", level: "ok" } : { label: "KO", level: "ko" };
+}
+
+function formatSourceDisplayLabel(source) {
+  return SOURCE_DISPLAY_LABELS[source?.id] || SOURCE_DISPLAY_LABELS[source?.source] || source?.label || "Source météo";
+}
+
+function formatSourceAge(source, status) {
+  if (status.level === "off") {
+    return "—";
+  }
+
+  if (Number.isFinite(source?.freshnessMinutes)) {
+    const roundedMinutes = Math.max(0, Math.round(source.freshnessMinutes));
+    return roundedMinutes < 1 ? "< 1 min" : formatDuration(roundedMinutes);
+  }
+
+  const timestamp = source?.updatedAt || source?.fetchedAt;
+
+  if (timestamp) {
+    const minutes = minutesSinceTimestamp(timestamp);
+    return Number.isFinite(minutes) ? formatDuration(minutes) : "—";
+  }
+
+  return "—";
+}
+
+function minutesSinceTimestamp(value) {
+  const time = Date.parse(value);
+
+  if (!Number.isFinite(time)) {
+    return null;
+  }
+
+  return Math.max(0, Math.round((Date.now() - time) / 60_000));
 }
 
 function buildSourceMeta(source, status) {
   const errors = source.errors?.length ? source.errors.join(" · ") : "";
 
-  if (source.message) {
-    return source.message;
-  }
-
   if (errors) {
     return errors;
-  }
-
-  if (source.updatedAt) {
-    return `Dernière donnée : ${formatDate(source.updatedAt)}`;
   }
 
   if (status.level === "off") {
     return "Source désactivée ou non configurée.";
   }
 
-  return "Aucune donnée récente.";
+  if (status.level === "ko") {
+    return source.message || "Source indisponible.";
+  }
+
+  if (status.level === "stale") {
+    return source.message || "Donnée trop ancienne pour décision prioritaire.";
+  }
+
+  if (source.id === "rainviewer" || source.source === "rainviewer") {
+    return "Fallback visuel radar.";
+  }
+
+  return "";
 }
 
 function isNoSignificantRain(rain) {
