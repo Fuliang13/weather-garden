@@ -870,9 +870,11 @@ function renderStationObservation(station) {
     els.stationHumidity.textContent = "—";
     els.stationWind.textContent = "—";
     els.stationGust.textContent = "—";
-    els.stationPressure.textContent = "Indisponible";
+    els.stationPressure.textContent = "—";
     els.stationRain.textContent = "—";
-    els.stationUv.textContent = "—";
+    if (els.stationUv) {
+      els.stationUv.textContent = "—";
+    }
     return;
   }
 
@@ -886,9 +888,23 @@ function renderStationObservation(station) {
   els.stationHumidity.textContent = formatValue(current.humidityPct, "%");
   els.stationWind.textContent = formatWind(current.windKmh);
   els.stationGust.textContent = formatWind(current.gustKmh);
-  els.stationPressure.textContent = formatStationFreshness(station);
-  els.stationRain.textContent = `${formatRainRate(current.rainRateMmPerHour)} · jour ${formatRain(current.dailyRainMm)}`;
-  els.stationUv.textContent = `${formatValue(current.uvIndex, "")} · ${formatValue(current.solarWm2, "W/m²")}`;
+  els.stationPressure.textContent = formatPressure(current.pressureHpa);
+  els.stationRain.textContent = formatStationObservedRain(current);
+  if (els.stationUv) {
+    els.stationUv.textContent = `${formatValue(current.uvIndex, "")} · ${formatValue(current.solarWm2, "W/m²")}`;
+  }
+}
+
+function formatStationObservedRain(current) {
+  if (Number.isFinite(current?.hourlyRainMm)) {
+    return formatRain(current.hourlyRainMm);
+  }
+
+  if (Number.isFinite(current?.rainRateMmPerHour)) {
+    return formatRainRate(current.rainRateMmPerHour);
+  }
+
+  return "—";
 }
 
 function renderStationStateBadge(label, stateName) {
