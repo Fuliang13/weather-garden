@@ -4,13 +4,15 @@ import { debugMeteoFranceHdf5, debugMeteoFranceRadar, fetchMeteoFranceRadar, fet
 import { fetchEcowittDiagnostics, fetchEcowittObservation } from "./sources/ecowitt.js";
 import { DEFAULT_LOCATION, DEFAULT_SETTINGS, buildWeatherStatus, mergeSettings } from "./scoring.js";
 import { buildGardenStatus, createDefaultGardenState, deleteGardenEntity, normalizeGardenState, upsertGardenEntity } from "./garden.js";
+import { WEATHER_HISTORY_RECENT_KEY, persistWeatherHistorySample } from "./weatherHistory.js";
 
 const KV_KEYS = {
   settings: "settings",
   latestStatus: "latest_status",
   lastRainAlert: "last_alert_rain",
   lastGardenAlert: "last_alert_garden",
-  gardenState: "garden_state"
+  gardenState: "garden_state",
+  weatherHistoryRecent: WEATHER_HISTORY_RECENT_KEY
 };
 
 export default {
@@ -221,7 +223,25 @@ async function computeAndStoreStatus(env) {
   status.garden = buildGardenStatus(gardenState, status, settings);
 
   await env.WEATHER_KV.put(KV_KEYS.latestStatus, JSON.stringify(status));
+  await storeWeatherHistory(env, status);
   return status;
+}
+
+async function storeWeatherHistory(env, status) {
+  try {
+    const result = await persistWeatherHistorySample({
+      kv: env.WEATHER_KV,
+      status,
+      key: KV_KEYS.weatherHistoryRecent,
+      now: new Date(status.updatedAt)
+    });
+
+    if (!result.ok) {
+      console.warn(`Weather history was not stored: ${result.reason}`);
+    }
+  } catch (error) {
+    console.error("Weather history write failed:", error);
+  }
 }
 
 async function settleSource(source, fn, errors) {

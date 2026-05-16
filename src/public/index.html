@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Weather Garden</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="/style.css?v=20260515-garden-workspace-wide">
+  <link rel="stylesheet" href="/assets/vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="/style.css?v=20260516-dashboard-v1">
 </head>
 <body>
   <main class="app-shell">
@@ -29,7 +29,7 @@
       <section id="alertCard" class="card alert-card dashboard-block dashboard-block-rain">
         <div class="rain-card-main">
           <div>
-            <h2>Pluie</h2>
+            <h2>Synthèse météo immédiate</h2>
             <p id="rainSummary" class="summary">Calcul en cours…</p>
           </div>
           <div class="rain-card-status">
@@ -40,29 +40,67 @@
         <div id="rainMeta" class="alert-meta"></div>
       </section>
 
+      <section class="card radar-card dashboard-block dashboard-block-radar">
+        <div class="section-header">
+          <div>
+            <h2>Radar pluie</h2>
+            <p id="radarStatus" class="muted">Chargement radar…</p>
+          </div>
+          <span id="radarAttribution" class="radar-attribution"></span>
+        </div>
+        <div id="radarMap" class="radar-map" role="img" aria-label="Carte radar centrée sur Louvigné-du-Désert"></div>
+        <div id="radarLegend" class="radar-legend" hidden>
+          <ul class="radar-legend-scale" aria-label="Légende de l'intensité des précipitations">
+            <li><span class="radar-swatch radar-light"></span>Pluie faible</li>
+            <li><span class="radar-swatch radar-moderate"></span>Modérée</li>
+            <li><span class="radar-swatch radar-heavy"></span>Forte</li>
+            <li><span class="radar-swatch radar-extreme"></span>Très forte</li>
+          </ul>
+          <p class="radar-legend-note">
+            Les couleurs indiquent l'intensité radar, pas le cumul exact au sol.
+          </p>
+        </div>
+      </section>
+
+
       <section class="grid dashboard-quick-grid">
-        <article id="stationCard" class="card dashboard-block dashboard-block-station" hidden>
-          <h2>Observation station</h2>
+        <article id="stationCard" class="card dashboard-block dashboard-block-station">
+          <h2>Observation locale</h2>
           <p id="stationSource" class="card-note muted">Station météo</p>
           <dl class="metrics metrics-wide">
-            <div><dt>Température</dt><dd id="stationTemperature">—</dd></div>
-            <div><dt>Humidité</dt><dd id="stationHumidity">—</dd></div>
-            <div><dt>Vent</dt><dd id="stationWind">—</dd></div>
-            <div><dt>Rafales</dt><dd id="stationGust">—</dd></div>
-            <div><dt>Pluie</dt><dd id="stationRain">—</dd></div>
-            <div><dt>Fraîcheur</dt><dd id="stationPressure">—</dd></div>
-            <div class="dashboard-secondary-metric"><dt>UV / solaire</dt><dd id="stationUv">—</dd></div>
+            <div><dt>Température</dt><dd id="stationTemperature">&mdash;</dd></div>
+            <div><dt>Humidité</dt><dd id="stationHumidity">&mdash;</dd></div>
+            <div><dt>Vent</dt><dd id="stationWind">&mdash;</dd></div>
+            <div><dt>Rafales</dt><dd id="stationGust">&mdash;</dd></div>
+            <div><dt>Pluie observée</dt><dd id="stationRain">&mdash;</dd></div>
+            <div><dt>Fraîcheur</dt><dd id="stationPressure">&mdash;</dd></div>
+            <div class="dashboard-secondary-metric"><dt>UV / solaire</dt><dd id="stationUv">&mdash;</dd></div>
           </dl>
         </article>
 
-        <article class="card dashboard-block dashboard-block-forecast">
+        <article id="forecastCard" class="card dashboard-block dashboard-block-forecast">
           <h2>Prévision immédiate</h2>
-          <p id="currentSource" class="card-note muted">Modèle météo</p>
-          <dl class="metrics">
-            <div><dt>Température</dt><dd id="temperature">—</dd></div>
-            <div><dt>Humidité</dt><dd id="humidity">—</dd></div>
-            <div><dt>Vent</dt><dd id="wind">—</dd></div>
-            <div><dt>Rafales</dt><dd id="gust">—</dd></div>
+          <p id="currentSource" class="card-note muted">Modèles météo</p>
+          <dl class="metrics dashboard-forecast-metrics" aria-label="Prévision immédiate modèles">
+            <div><dt>Température</dt><dd id="temperature">&mdash;</dd></div>
+            <div><dt>Humidité</dt><dd id="humidity">&mdash;</dd></div>
+            <div><dt>Vent</dt><dd id="wind">&mdash;</dd></div>
+            <div><dt>Rafales</dt><dd id="gust">&mdash;</dd></div>
+          </dl>
+        </article>
+
+        <article id="differentialCard" class="card dashboard-block dashboard-block-differential">
+          <div class="section-header dashboard-differential-header">
+            <div>
+              <h2>Écart réel / modèles</h2>
+              <p id="differentialSummary" class="card-note muted">Comparaison station et prévision immédiate.</p>
+            </div>
+            <span id="differentialBadge" class="differential-badge">?</span>
+          </div>
+          <dl id="differentialMetrics" class="differential-metrics" aria-label="Différentiel station modèles">
+            <div><dt>Température</dt><dd id="temperatureDelta">&mdash;</dd></div>
+            <div><dt>Pluie</dt><dd id="rainDelta">&mdash;</dd></div>
+            <div><dt>Vent</dt><dd id="windDelta">&mdash;</dd></div>
           </dl>
         </article>
 
@@ -87,34 +125,12 @@
       <section id="gardenCard" class="card garden-card dashboard-block dashboard-block-garden" hidden>
         <div class="section-header">
           <div>
-            <h2>Mode jardin</h2>
+            <h2>Impacts jardin</h2>
             <p id="gardenSummary" class="garden-summary">Calcul en cours…</p>
           </div>
           <span id="gardenBadge" class="garden-badge"></span>
         </div>
         <ul id="gardenDetails" class="garden-details"></ul>
-      </section>
-
-      <section class="card radar-card dashboard-block dashboard-block-radar">
-        <div class="section-header">
-          <div>
-            <h2>Radar</h2>
-            <p id="radarStatus" class="muted">Chargement radar…</p>
-          </div>
-          <span id="radarAttribution" class="radar-attribution"></span>
-        </div>
-        <div id="radarMap" class="radar-map" role="img" aria-label="Carte radar centrée sur Louvigné-du-Désert"></div>
-        <div id="radarLegend" class="radar-legend" hidden>
-          <ul class="radar-legend-scale" aria-label="Légende de l'intensité des précipitations">
-            <li><span class="radar-swatch radar-light"></span>Pluie faible</li>
-            <li><span class="radar-swatch radar-moderate"></span>Modérée</li>
-            <li><span class="radar-swatch radar-heavy"></span>Forte</li>
-            <li><span class="radar-swatch radar-extreme"></span>Très forte</li>
-          </ul>
-          <p class="radar-legend-note">
-            Les couleurs indiquent l'intensité radar, pas le cumul exact au sol.
-          </p>
-        </div>
       </section>
     </section>
 
@@ -147,8 +163,8 @@
               <span id="gardenEntitiesCount" class="garden-entity-count">0 entité</span>
             </div>
             <div class="garden-entities-tools">
-              <input id="gardenEntitySearch" class="garden-entity-search" type="search" placeholder="Rechercher une entité…" autocomplete="off">
-              <select id="gardenEntityTypeFilter" class="garden-entity-type-filter">
+              <input id="gardenEntitySearch" class="garden-entity-search" type="search" placeholder="Rechercher une entité…" autocomplete="off" aria-label="Rechercher une entite jardin">
+              <select id="gardenEntityTypeFilter" class="garden-entity-type-filter" aria-label="Filtrer les entites jardin par type">
                 <option value="all">Tous les types</option>
                 <option value="zones">Zones</option>
                 <option value="vine">Vigne</option>
@@ -252,7 +268,7 @@
         <div class="section-header">
           <div>
             <h2 id="gardenAlertsTitle"></h2>
-            <p id="gardenAlertsSummary" class="garden-summary">—</p>
+            <p id="gardenAlertsSummary" class="garden-summary">?</p>
           </div>
         </div>
         <ul id="gardenAlertsList" class="garden-details garden-alerts-list"></ul>
@@ -350,7 +366,7 @@
     </section>
   </main>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/app.js?v=20260515-garden-workspace" type="module"></script>
+  <script src="/assets/vendor/leaflet/leaflet.js"></script>
+  <script src="/app.js?v=20260516-dashboard-v1" type="module"></script>
 </body>
 </html>

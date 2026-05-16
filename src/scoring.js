@@ -280,7 +280,7 @@ function buildWgfForecast({ horizon, arome, met, radar, ecowitt, settings }) {
       windKmh: null,
       gustKmh: null,
       confidence: "unavailable",
-      summary: "Prevision WGF indisponible.",
+      summary: "Prévision WGF indisponible.",
       reason: "Aucune source exploitable pour cet horizon."
     };
   }
@@ -437,7 +437,7 @@ function buildWgfSummary(precipitationMm, settings) {
   }
 
   if (precipitationMm >= Math.max(5, settings.rainThresholdMm * 10)) {
-    return "Pluie marquee possible.";
+    return "Pluie marquée possible.";
   }
 
   if (precipitationMm >= settings.rainThresholdMm) {
@@ -448,14 +448,14 @@ function buildWgfSummary(precipitationMm, settings) {
 }
 
 function buildWgfReason({ primaryAvailable, confirmationAvailable, divergence, state, observedInputs }) {
-  const observed = observedInputs.length ? " Observation locale fraiche prise en compte." : "";
+  const observed = observedInputs.length ? " Observation locale fraîche prise en compte." : "";
 
   if (state !== "fresh") {
-    return `Donnees anciennes ou partielles.${observed}`;
+    return `Données anciennes ou partielles.${observed}`;
   }
 
   if (primaryAvailable && confirmationAvailable && !divergence) {
-    return `AROME et MET Norway sont coherents.${observed}`;
+    return `AROME et MET Norway sont cohérents.${observed}`;
   }
 
   if (primaryAvailable && confirmationAvailable && divergence) {
@@ -579,11 +579,11 @@ function buildRainHeadline(rainSignal, alertLevel) {
 
   if (rainSignal.etaMinutes !== null && alertLevel !== "none") {
     const label = rainSignal.intensityLevel === "none" ? "Pluie probable" : rainSignal.intensityLabel;
-    return `${label} probable dans ${rainSignal.etaMinutes} min`;
+    return `${label} probable ${formatRainEta(rainSignal.etaMinutes)}`;
   }
 
   if (rainSignal.etaMinutes !== null) {
-    return `Pluie possible dans ${rainSignal.etaMinutes} min`;
+    return `Pluie possible ${formatRainEta(rainSignal.etaMinutes)}`;
   }
 
   return "Pas de pluie significative";
@@ -596,7 +596,7 @@ function buildRainDetail(rainSignal, alertHorizon, settings) {
   const precipitation = formatRain(alertHorizon.precipitationMm, settings);
 
   if (rainSignal.activeNow) {
-    return `Intensité estimée ${intensity} · cumul prévu ${precipitation} sur ${alertHorizon.minutes} min.`;
+    return `Intensité estimée ${intensity} · cumul prévu ${precipitation} ${formatRainHorizon(alertHorizon.minutes)}.`;
   }
 
   if (rainSignal.noSignificantRain) {
@@ -604,7 +604,7 @@ function buildRainDetail(rainSignal, alertHorizon, settings) {
   }
 
   if (rainSignal.etaMinutes !== null) {
-    return `${capitalize(risk)} sur ${alertHorizon.minutes} min · score ${score} % · cumul prévu ${precipitation}.`;
+    return `${capitalize(risk)} ${formatRainHorizon(alertHorizon.minutes)} · score ${score} % · cumul prévu ${precipitation}.`;
   }
 
   return `Aucune pluie significative détectée sur l'horizon prioritaire · score ${score} %. `;
@@ -633,8 +633,8 @@ function buildGardenAdvice({ current, rainSignal, alertHorizon, horizonResults, 
       level: "watch",
       headline: "Arrosage à reporter",
       details: [
-        `${rainSignal.intensityLabel === "Pas de pluie" ? "Pluie" : rainSignal.intensityLabel} attendue sur l'horizon ${alertHorizon.minutes} min.`,
-        `Cumul estimé : ${formatRain(alertHorizon.precipitationMm, settings)} sur ${alertHorizon.minutes} min.`,
+        `${rainSignal.intensityLabel === "Pas de pluie" ? "Pluie" : rainSignal.intensityLabel} attendue ${formatRainHorizon(alertHorizon.minutes)}.`,
+        `Cumul estimé : ${formatRain(alertHorizon.precipitationMm, settings)} ${formatRainHorizon(alertHorizon.minutes)}.`,
         "Attends la fin de l'épisode avant d'arroser ou de traiter."
       ]
     };
@@ -1075,6 +1075,42 @@ function formatTemperature(valueC, settings) {
   return `${formatNullableNumber(valueC)} °C`;
 }
 
+function formatRainEta(minutes) {
+  const rounded = Math.max(0, Math.round(minutes));
+
+  if (!Number.isFinite(rounded)) {
+    return "";
+  }
+
+  if (rounded <= 120) {
+    return `dans ${rounded} min`;
+  }
+
+  return `vers ${formatLocalTimeFromNow(rounded)}`;
+}
+
+function formatRainHorizon(minutes) {
+  const rounded = Math.max(0, Math.round(minutes));
+
+  if (!Number.isFinite(rounded)) {
+    return "";
+  }
+
+  if (rounded <= 120) {
+    return `sur ${rounded} min`;
+  }
+
+  return `vers ${formatLocalTimeFromNow(rounded)}`;
+}
+
+function formatLocalTimeFromNow(minutes) {
+  return new Intl.DateTimeFormat("fr-FR", {
+    hour: "2-digit",
+    minute: minutes % 60 ? "2-digit" : undefined,
+    timeZone: "Europe/Paris"
+  }).format(new Date(Date.now() + minutes * 60_000)).replace(":", "h");
+}
+
 function formatRain(valueMm, settings) {
   if (settings.unitSystem === "imperial") {
     return `${formatNullableNumber(convertMmToInches(valueMm), 2)} in`;
@@ -1101,7 +1137,7 @@ function convertMmToInches(value) {
 
 function formatNullableNumber(value, digits = 1) {
   if (!Number.isFinite(value)) {
-    return "—";
+    return "?";
   }
 
   return String(round(value, digits));

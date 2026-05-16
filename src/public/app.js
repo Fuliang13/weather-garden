@@ -86,6 +86,12 @@ const els = {
   stationPressure: document.querySelector("#stationPressure"),
   stationRain: document.querySelector("#stationRain"),
   stationUv: document.querySelector("#stationUv"),
+  differentialCard: document.querySelector("#differentialCard"),
+  differentialSummary: document.querySelector("#differentialSummary"),
+  differentialBadge: document.querySelector("#differentialBadge"),
+  temperatureDelta: document.querySelector("#temperatureDelta"),
+  rainDelta: document.querySelector("#rainDelta"),
+  windDelta: document.querySelector("#windDelta"),
   currentSource: document.querySelector("#currentSource"),
   temperature: document.querySelector("#temperature"),
   humidity: document.querySelector("#humidity"),
@@ -210,7 +216,8 @@ async function loadStatus(forceRefresh) {
     const status = await response.json();
 
     if (!response.ok || status.ok === false) {
-      throw new Error(status.error || "Erreur météo");
+      renderLoadError(status.error || "Erreur météo");
+      return;
     }
 
     const [gardenState, ecowittDiagnostics] = await Promise.all([
@@ -224,12 +231,16 @@ async function loadStatus(forceRefresh) {
     renderStatus(status);
     scheduleNextRefresh();
   } catch (error) {
-    els.rainSummary.textContent = error.message;
-    els.alertCard.dataset.level = "high";
-    els.refreshStatus.textContent = "Mise à jour impossible.";
+    renderLoadError(error.message);
   } finally {
     setLoading(false);
   }
+}
+
+function renderLoadError(message) {
+  els.rainSummary.textContent = message;
+  els.alertCard.dataset.level = "high";
+  els.refreshStatus.textContent = "Mise à jour impossible.";
 }
 
 function startAutoRefresh() {
@@ -250,7 +261,8 @@ async function fetchGardenState() {
     const response = await fetch("/api/garden");
 
     if (!response.ok) {
-      throw new Error("Chargement du jardin impossible.");
+      state.gardenLoadError = new Error("Chargement du jardin impossible.");
+      return null;
     }
 
     state.gardenLoadError = null;
@@ -267,7 +279,8 @@ async function fetchEcowittDiagnostics() {
     const diagnostics = await readJsonResponse(response);
 
     if (!response.ok || diagnostics.ok === false) {
-      throw new Error(diagnostics.error || diagnostics.message || "Historique Ecowitt indisponible.");
+      state.ecowittLoadError = new Error(diagnostics.error || diagnostics.message || "Historique Ecowitt indisponible.");
+      return null;
     }
 
     state.ecowittLoadError = null;
@@ -348,7 +361,9 @@ async function saveGardenEntity(event) {
     });
 
     if (!response.ok) {
-      throw new Error("Erreur lors de l'enregistrement.");
+      state.gardenSaveError = new Error("Erreur lors de l'enregistrement.");
+      els.gardenEntityMessage.textContent = state.gardenSaveError.message;
+      return;
     }
 
     const savedState = await response.json();
@@ -379,7 +394,9 @@ async function deleteGardenEntity(id) {
     });
 
     if (!response.ok) {
-      throw new Error("Suppression impossible.");
+      state.gardenSaveError = new Error("Suppression impossible.");
+      els.gardenEntityMessage.textContent = state.gardenSaveError.message;
+      return;
     }
 
     state.selectedGardenEntityId = null;
@@ -426,7 +443,9 @@ async function resetGarden() {
     });
 
     if (!response.ok) {
-      throw new Error("Réinitialisation impossible.");
+      state.gardenSaveError = new Error("Réinitialisation impossible.");
+      els.gardenEntityMessage.textContent = state.gardenSaveError.message;
+      return;
     }
 
     state.selectedGardenEntityId = null;
@@ -454,7 +473,8 @@ async function sendTestNotification() {
     const data = await readJsonResponse(response);
 
     if (!response.ok || data.ok === false) {
-      throw new Error(data.error || "Notification de test impossible.");
+      els.settingsMessage.textContent = data.error || "Notification de test impossible.";
+      return;
     }
 
     els.settingsMessage.textContent = "Notification de test envoyée.";
@@ -499,14 +519,17 @@ function renderStatus(status) {
   els.location.textContent = `${status.location.name} · ${formatCoord(status.location.latitude)}, ${formatCoord(status.location.longitude)}`;
   els.alertCard.dataset.level = noSignificantRain ? "none" : rain.presentationLevel || rain.alertLevel;
   els.alertCard.dataset.quiet = String(noSignificantRain);
-  els.rainSummary.textContent = rain.headline || rain.alertLabel;
+  els.rainSummary.textContent = buildDashboardRainHeadline(rain) || rain.headline || rain.alertLabel;
   els.rainEta.textContent = noSignificantRain ? "" : buildRainEtaText(rain);
   els.rainEta.hidden = noSignificantRain || !els.rainEta.textContent;
   els.rainDetail.textContent = noSignificantRain ? "" : rain.detail || "";
   els.rainDetail.hidden = noSignificantRain || !els.rainDetail.textContent;
-  renderRainMeta(rain);
-  renderStationObservation(status.stationObservation || status.observation?.station || null);
-  renderCurrentForecast(status.current);
+  const immediateForecast = getImmediateModelForecast(status.forecastComparison);
+  const stationObservation = status.stationObservation || status.observation?.station || null;
+  renderRainMeta(rain, stationObservation, immediateForecast, status.forecastComparison);
+  renderStationObservation(stationObservation);
+  renderCurrentForecast(immediateForecast);
+  renderDifferential(stationObservation, immediateForecast);
   renderHorizons(rain.horizons || [], noSignificantRain);
   renderForecastComparison(status.forecastComparison);
   renderGarden(rain.garden, status.garden);
@@ -519,23 +542,28 @@ function renderStatus(status) {
   els.updatedAt.textContent = `Dernière mise à jour : ${formatDate(status.updatedAt)}`;
 }
 
-function renderRainMeta(rain) {
+function renderRainMeta(rain, station, current, comparison) {
   els.rainMeta.innerHTML = "";
 
   const horizon = rain.horizons?.[0];
   const horizonScore = Number.isFinite(horizon?.score) ? Math.round(horizon.score * 100) : 0;
   const sourceLabel = rain.observation?.source === "station" ? "station locale" : "prévision";
+  const wgf = getImmediateWgfForecast(comparison);
+  const confidence = formatWgfConfidence(wgf?.confidence || current?.confidence);
+  const stationTemperature = station?.current?.temperatureC;
+  const dryWindow = Number.isFinite(rain.noRainWindowMinutes)
+    ? formatHumanDuration(Math.round(rain.noRainWindowMinutes))
+    : null;
   const items = isNoSignificantRain(rain)
     ? [
-      { label: "État", value: rain.noRainWindowMinutes ? `sec ${formatDuration(rain.noRainWindowMinutes)}` : "temps sec" },
-      { label: "Risque", value: horizon ? `${horizonScore} % à ${formatDuration(horizon.minutes)}` : "faible" },
-      { label: "Source", value: sourceLabel },
-      { label: "Fraîcheur", value: "synthèse actuelle" }
+      { label: "Temp. réelle", value: formatTemperature(stationTemperature) },
+      { label: "Pluie", value: dryWindow ? `pas avant ${dryWindow}` : "pas de signal proche" },
+      { label: "Confiance", value: confidence || (horizon ? `${horizonScore} %` : "stable") }
     ]
     : [
-      { label: "Intensité", value: `${rain.intensityLabel} · ${formatRainRate(rain.intensityMmPerHour)}` },
-      { label: "Risque", value: `${rain.riskLabel} · ${horizonScore} % à ${horizon ? formatDuration(horizon.minutes) : "30 min"}` },
-      { label: "Durée", value: rain.expectedDurationMinutes ? formatDuration(rain.expectedDurationMinutes) : "à surveiller" },
+      { label: "Intensité", value: `${rain.intensityLabel} - ${formatRainRate(rain.intensityMmPerHour)}` },
+      { label: "Risque", value: `${rain.riskLabel} - ${horizonScore} % ${horizon ? formatHorizonLabel(horizon.minutes) : "30 min"}` },
+      { label: "Durée", value: rain.expectedDurationMinutes ? formatHumanDuration(rain.expectedDurationMinutes) : "à surveiller" },
       { label: "Source", value: sourceLabel }
     ];
 
@@ -548,7 +576,6 @@ function renderRainMeta(rain) {
     els.rainMeta.append(pill);
   });
 }
-
 function buildRainEtaText(rain) {
   if (isNoSignificantRain(rain)) {
     return "";
@@ -562,12 +589,62 @@ function buildRainEtaText(rain) {
     return "Aucune arrivée de pluie significative détectée dans les données immédiates.";
   }
 
-  return `Arrivée estimée : ${rain.etaMinutes} min.`;
+  return `Arrivée estimée ${formatRainEta(rain.etaMinutes)}.`;
+}
+
+function buildDashboardRainHeadline(rain) {
+  if (rain?.activeNow) {
+    return rain.headline || rain.alertLabel;
+  }
+
+  if (isNoSignificantRain(rain) && Number.isFinite(rain.noRainWindowMinutes) && rain.noRainWindowMinutes >= 120) {
+    return `Fenêtre sèche d'environ ${formatDuration(Math.round(rain.noRainWindowMinutes))}`;
+  }
+
+  if (!Number.isFinite(rain?.etaMinutes) || rain.etaMinutes <= 120) {
+    return "";
+  }
+
+  const prefix = rain.alertLevel && rain.alertLevel !== "none" ? "Pluie probable" : "Pluie possible";
+  return `${prefix} ${formatRainEta(rain.etaMinutes)}`;
+}
+
+function formatRainEta(minutes) {
+  if (!Number.isFinite(minutes)) {
+    return "";
+  }
+
+  const rounded = Math.max(0, Math.round(minutes));
+
+  if (rounded <= 120) {
+    return `dans ${rounded} min`;
+  }
+
+  return `vers ${formatTimeFromNow(rounded)}`;
+}
+
+function formatTimeFromNow(minutes) {
+  const etaDate = new Date(Date.now() + minutes * 60_000);
+  const etaHour = new Intl.DateTimeFormat("fr-FR", {
+    hour: "2-digit",
+    minute: minutes % 60 ? "2-digit" : undefined
+  }).format(etaDate).replace(":", "h");
+
+  return etaHour;
 }
 
 function renderStationObservation(station) {
   if (!station?.current) {
-    els.stationCard.hidden = true;
+    els.stationCard.hidden = false;
+    els.stationCard.dataset.stale = "true";
+    els.stationSource.textContent = "Observation locale indisponible";
+    els.stationTemperature.textContent = "?";
+    els.stationHumidity.textContent = "?";
+    els.stationWind.textContent = "?";
+    els.stationGust.textContent = "?";
+    els.stationPressure.textContent = "?";
+    els.stationRain.textContent = "?";
+    els.stationUv.textContent = "?";
     return;
   }
 
@@ -585,15 +662,168 @@ function renderStationObservation(station) {
 }
 
 function renderCurrentForecast(current) {
-  els.currentSource.textContent = current?.sourceLabel || "Prévision immédiate · Open-Meteo AROME / MET Norway";
+  els.currentSource.textContent = current?.sourceLabel || "Prévision modèles - AROME / MET Norway";
   els.temperature.textContent = formatTemperature(current?.temperatureC);
   els.humidity.textContent = formatValue(current?.humidityPct, "%");
   els.wind.textContent = formatWind(current?.windKmh);
   els.gust.textContent = formatWind(current?.gustKmh);
 }
 
+function getImmediateModelForecast(comparison) {
+  const horizons = Array.isArray(comparison?.horizons) ? comparison.horizons : [];
+  const horizon = horizons.find((item) => item.minutes === 60)
+    || horizons.find((item) => Number.isFinite(item.minutes) && item.minutes <= 120)
+    || horizons[0];
+  const modelEntries = [
+    ["AROME", horizon?.sources?.arome],
+    ["MET Norway", horizon?.sources?.metNorway]
+  ].filter(([, source]) => source?.available);
+  const modelSources = modelEntries.map(([, source]) => source);
+
+  if (!modelSources.length) {
+    return {
+      sourceLabel: "Prévision modèles indisponible",
+      temperatureC: null,
+      humidityPct: null,
+      windKmh: null,
+      gustKmh: null,
+      precipitationMm: null
+    };
+  }
+
+  return {
+    sourceLabel: `Prévision modèles - ${modelEntries.map(([label]) => label).join(" / ")}`,
+    temperatureC: averageFinite(modelSources.map((source) => source.temperatureC)),
+    humidityPct: null,
+    windKmh: averageFinite(modelSources.map((source) => source.windKmh)),
+    gustKmh: averageFinite(modelSources.map((source) => source.gustKmh)),
+    precipitationMm: averageFinite(modelSources.map((source) => source.precipitationMm))
+  };
+}
+
+function getImmediateWgfForecast(comparison) {
+  const horizons = Array.isArray(comparison?.horizons) ? comparison.horizons : [];
+  const horizon = horizons.find((item) => item.minutes === 60)
+    || horizons.find((item) => Number.isFinite(item.minutes) && item.minutes <= 120)
+    || horizons[0];
+
+  return horizon?.sources?.wgf || null;
+}
+
+function averageFinite(values) {
+  const finiteValues = values.filter(Number.isFinite);
+
+  if (!finiteValues.length) {
+    return null;
+  }
+
+  return finiteValues.reduce((sum, value) => sum + value, 0) / finiteValues.length;
+}
+
+function renderDifferential(station, current) {
+  const stationCurrent = station?.current || null;
+  const hasStation = !!stationCurrent && station?.ok !== false;
+  const hasForecast = !!current && [current.temperatureC, current.windKmh, current.precipitationMm].some(Number.isFinite);
+
+  if (!els.differentialCard) {
+    return;
+  }
+
+  if (!hasStation || !hasForecast) {
+    els.differentialCard.dataset.state = "unavailable";
+    els.differentialBadge.textContent = "À compléter";
+    els.differentialSummary.textContent = "Station ou prévision immédiate indisponible.";
+    els.temperatureDelta.textContent = "?";
+    els.rainDelta.textContent = "?";
+    els.windDelta.textContent = "?";
+    return;
+  }
+
+  const temperatureDelta = finiteDelta(stationCurrent.temperatureC, current.temperatureC);
+  const windDelta = finiteDelta(stationCurrent.windKmh, current.windKmh);
+  const observedRainRate = Number.isFinite(stationCurrent.rainRateMmPerHour) ? stationCurrent.rainRateMmPerHour : null;
+  const forecastRain = Number.isFinite(current.precipitationMm) ? current.precipitationMm : null;
+  const rainDiverges = (observedRainRate !== null && forecastRain !== null)
+    ? (observedRainRate >= 0.1 && forecastRain < 0.05) || (observedRainRate < 0.1 && forecastRain >= 0.2)
+    : false;
+  const strongDivergence = Math.abs(temperatureDelta || 0) >= 2.5 || Math.abs(windDelta || 0) >= 15 || rainDiverges;
+  const mildDivergence = Math.abs(temperatureDelta || 0) >= 1.2 || Math.abs(windDelta || 0) >= 8;
+  const state = strongDivergence ? "divergent" : mildDivergence ? "watch" : "coherent";
+  const divergenceReasons = buildDifferentialReasons({
+    temperatureDelta,
+    windDelta,
+    observedRainRate,
+    forecastRain,
+    rainDiverges
+  });
+
+  els.differentialCard.dataset.state = state;
+  els.differentialBadge.textContent = {
+    coherent: "Cohérent",
+    watch: "À surveiller",
+    divergent: "Divergence"
+  }[state];
+  els.differentialSummary.textContent = state === "coherent"
+    ? "Situation cohérente entre observation locale et prévision."
+    : divergenceReasons.join(" ");
+  els.temperatureDelta.textContent = formatSignedDelta(temperatureDelta, "°C");
+  els.rainDelta.textContent = formatRainDifferential(observedRainRate, forecastRain);
+  els.windDelta.textContent = formatSignedDelta(windDelta, "km/h");
+}
+
+function finiteDelta(observed, forecast) {
+  return Number.isFinite(observed) && Number.isFinite(forecast) ? observed - forecast : null;
+}
+
+function buildDifferentialReasons({ temperatureDelta, windDelta, observedRainRate, forecastRain, rainDiverges }) {
+  const reasons = [];
+
+  if (rainDiverges && Number.isFinite(observedRainRate) && Number.isFinite(forecastRain)) {
+    reasons.push(observedRainRate > forecastRain
+      ? "Les modèles sous-estiment actuellement la pluie locale."
+      : "Les modèles voient plus de pluie que la station.");
+  }
+
+  if (Number.isFinite(temperatureDelta) && Math.abs(temperatureDelta) >= 1.2) {
+    reasons.push(temperatureDelta > 0
+      ? "La station est plus douce que la prévision."
+      : "La station est plus fraîche que la prévision.");
+  }
+
+  if (Number.isFinite(windDelta) && Math.abs(windDelta) >= 8) {
+    reasons.push(windDelta > 0
+      ? "Le vent local est plus fort que prévu."
+      : "Le vent local est plus calme que prévu.");
+  }
+
+  return reasons.length ? reasons : ["Écart notable entre le terrain et les modèles."];
+}
+
+function formatSignedDelta(value, unit) {
+  if (!Number.isFinite(value)) {
+    return "?";
+  }
+
+  const rounded = Math.round(value * 10) / 10;
+  const sign = rounded > 0 ? "+" : "";
+  return `${sign}${rounded} ${unit}`;
+}
+
+function formatRainDifferential(observedRainRate, forecastRain) {
+  if (!Number.isFinite(observedRainRate) || !Number.isFinite(forecastRain)) {
+    return "?";
+  }
+
+  return `${formatRainRate(observedRainRate)} obs. / ${formatRain(forecastRain)} prévu`;
+}
+
 function renderHorizons(horizons, noSignificantRain) {
   els.horizons.innerHTML = "";
+
+  if (noSignificantRain) {
+    els.horizonsCard.hidden = true;
+    return;
+  }
 
   const compactHorizons = getCompactRainHorizons(horizons);
   els.horizonsCard.hidden = !compactHorizons.length;
@@ -633,7 +863,7 @@ function formatStationFreshness(station) {
     return "Ancien";
   }
 
-  return station.updatedAt ? "OK" : "—";
+  return station.updatedAt ? "OK" : "?";
 }
 
 function renderForecastComparison(comparison) {
@@ -741,6 +971,7 @@ function buildForecastSourceCell(label, source, isWgf = false) {
   const cellLabel = document.createElement("span");
   const status = document.createElement("span");
   const body = document.createElement("span");
+  const facts = document.createElement("dl");
   const reason = document.createElement("small");
 
   cell.className = `forecast-source-cell${isWgf ? " forecast-source-wgf" : ""}`;
@@ -758,11 +989,17 @@ function buildForecastSourceCell(label, source, isWgf = false) {
   status.textContent = formatForecastState(source);
   body.className = "forecast-source-main";
   body.textContent = formatForecastSourceMain(source, isWgf);
+  facts.className = "forecast-source-facts";
+  facts.innerHTML = buildForecastSourceFacts(source, isWgf);
   reason.className = "forecast-source-reason";
 
   headingText.append(cellLabel, status);
   heading.append(icon, headingText);
   cell.append(heading, body);
+
+  if (facts.innerHTML) {
+    cell.append(facts);
+  }
 
   if (isWgf) {
     appendWgfReason(reason, source);
@@ -775,6 +1012,29 @@ function buildForecastSourceCell(label, source, isWgf = false) {
   }
 
   return cell;
+}
+
+function buildForecastSourceFacts(source, isWgf) {
+  if (!source?.available) {
+    return "";
+  }
+
+  const facts = [
+    ["Temp.", formatTemperature(source.temperatureC)],
+    ["Pluie", formatForecastRain(source.precipitationMm)],
+    ["Vent", formatWind(source.windKmh)]
+  ];
+
+  if (isWgf) {
+    facts.push(["Confiance", formatWgfConfidence(source.confidence) || ""]);
+  } else {
+    facts.push(["Etat", formatForecastState(source)]);
+  }
+
+  return facts
+    .filter(([, value]) => value && value !== "?")
+    .map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`)
+    .join("");
 }
 
 function buildForecastWeatherIconPath(source, isWgf) {
@@ -968,7 +1228,7 @@ function formatForecastSourceMain(source, isWgf) {
 
 function formatForecastRain(value) {
   if (!Number.isFinite(value)) {
-    return "—";
+    return "?";
   }
 
   return value < 0.05 ? "sec" : formatRain(value);
@@ -1023,7 +1283,10 @@ function appendWgfReason(container, source) {
 }
 
 function formatWgfReasonLabel(source) {
-  const reason = String(source?.reason || "").toLowerCase();
+  const reason = String(source?.reason || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
 
   if (!source?.available) {
     return "WGF indisponible";
@@ -1471,8 +1734,7 @@ function updateGardenFormState() {
     return;
   }
 
-  const label = getGardenStatusLabel();
-  els.gardenFormState.textContent = label;
+  els.gardenFormState.textContent = getGardenStatusLabel();
   els.gardenFormState.dataset.state = getGardenStatusState();
   renderGardenStatusBadge();
 }
@@ -2469,7 +2731,7 @@ function convertMmToInches(value) {
 
 function formatValue(value, unit, digits = 1) {
   if (!Number.isFinite(value)) {
-    return "—";
+    return "?";
   }
 
   const factor = 10 ** digits;
@@ -2479,7 +2741,7 @@ function formatValue(value, unit, digits = 1) {
 
 function formatDate(value) {
   if (!value) {
-    return "—";
+    return "?";
   }
 
   return new Intl.DateTimeFormat("fr-FR", {
@@ -2488,25 +2750,51 @@ function formatDate(value) {
   }).format(new Date(value));
 }
 
-function formatDuration(minutes) {
-  if (!Number.isFinite(minutes)) {
-    return "—";
+function formatHorizonLabel(minutes) {
+  const rounded = Math.max(0, Math.round(minutes));
+
+  if (!Number.isFinite(rounded)) {
+    return "";
   }
 
-  if (minutes >= 1440) {
-    const days = Math.floor(minutes / 1440);
-    const remainingHours = Math.floor((minutes % 1440) / 60);
+  return rounded > 120 ? `vers ${formatTimeFromNow(rounded)}` : `a ${rounded} min`;
+}
+
+function formatHumanDuration(minutes) {
+  const rounded = Math.max(0, Math.round(minutes));
+
+  if (!Number.isFinite(rounded)) {
+    return "?";
+  }
+
+  if (rounded > 120) {
+    return formatTimeFromNow(rounded);
+  }
+
+  return formatDuration(rounded);
+}
+
+function formatDuration(minutes) {
+  if (!Number.isFinite(minutes)) {
+    return "?";
+  }
+
+  const rounded = Math.max(0, Math.round(minutes));
+
+  if (rounded >= 1440) {
+    const days = Math.floor(rounded / 1440);
+    const remainingHours = Math.floor((rounded % 1440) / 60);
     const dayText = `${days} jour${days > 1 ? "s" : ""}`;
     return remainingHours ? `${dayText} ${remainingHours} h` : dayText;
   }
 
-  if (minutes >= 60) {
-    const hours = Math.floor(minutes / 60);
-    const remainingMinutes = minutes % 60;
+  if (rounded >= 60) {
+    const hours = Math.floor(rounded / 60);
+    const remainingMinutes = rounded % 60;
     return remainingMinutes ? `${hours} h ${remainingMinutes} min` : `${hours} h`;
   }
 
-  return `${minutes} min`;
+  return `${rounded} min`;
 }
 
 function formatCountdown(seconds) {
