@@ -3247,9 +3247,9 @@ body[data-active-panel="dashboard"] .panel-nav {
 
 .radar-radius-buttons {
 	position: absolute;
-	top: clamp(1.25rem, 3.5vw, 2.6rem);
-	left: clamp(1.25rem, 3.5vw, 2.6rem);
-	z-index: 620;
+	top: 15%;
+	left: 16%;
+	z-index: 780;
 	display: grid;
 	overflow: hidden;
 	border: 1px solid rgba(30, 36, 32, 0.18);
@@ -3609,8 +3609,8 @@ body[data-active-panel="dashboard"] .panel-nav {
 	}
 
 	.radar-radius-buttons {
-		top: 1rem;
-		left: 1rem;
+		top: 15%;
+		left: 16%;
 	}
 
 	.radar-radius-buttons button {
