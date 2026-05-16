@@ -757,12 +757,10 @@ function formatRainEta(minutes) {
 
 function formatTimeFromNow(minutes) {
   const etaDate = new Date(Date.now() + minutes * 60_000);
-  const etaHour = new Intl.DateTimeFormat("fr-FR", {
+  return new Intl.DateTimeFormat("fr-FR", {
     hour: "2-digit",
     minute: minutes % 60 ? "2-digit" : undefined
   }).format(etaDate).replace(":", "h");
-
-  return etaHour;
 }
 
 function renderStationObservation(station) {
@@ -1996,7 +1994,9 @@ async function importGardenKmlFile(file) {
     const data = await readJsonResponse(response);
 
     if (!response.ok || data.ok === false) {
-      throw new Error(data.error || "Import KML impossible.");
+      state.gardenSaveError = new Error(data.error || "Import KML impossible.");
+      els.gardenKmlMessage.textContent = state.gardenSaveError.message;
+      return;
     }
 
     state.gardenState = data.garden;
@@ -2025,7 +2025,9 @@ async function exportGardenKml() {
 
     if (!response.ok) {
       const data = await readJsonResponse(response);
-      throw new Error(data.error || "Export KML impossible.");
+      state.gardenSaveError = new Error(data.error || "Export KML impossible.");
+      els.gardenKmlMessage.textContent = state.gardenSaveError.message;
+      return;
     }
 
     const blob = await response.blob();
@@ -2693,7 +2695,7 @@ function renderRadarDistanceRings(radiusKm) {
     const label = document.createElement("strong");
     const size = Math.max(14, Math.min(100, distanceKm / radiusKm * 100));
     ring.className = "radar-distance-ring";
-    ring.style.setProperty("--ring-size", `${size}%`);
+    ring.style.setProperty("--radar-ring-size", `${size}%`);
     label.textContent = `${Math.round(distanceKm)} km`;
     ring.append(label);
     els.radarDistanceRings.append(ring);
@@ -3102,7 +3104,7 @@ function getHighestGardenAlertLevel(alerts) {
 }
 
 function uiText(value) {
-  const match = String(value).match(/^@\{%(.+)%\}$/);
+  const match = String(value).match(/^@\{%(.+)%}$/);
   return match ? match[1] : value;
 }
 

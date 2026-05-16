@@ -11,6 +11,8 @@
 	--danger: #c1121f;
 	--wet: #277da1;
 	--garden: #588157;
+	--garden-entity-color: #7c8a80;
+	--radar-ring-size: 100%;
 	--shadow: 0 12px 30px rgba(27, 38, 32, 0.08);
 }
 
@@ -1261,8 +1263,8 @@ body[data-active-panel="garden"] .app-shell {
 	height: 22px;
 	border: 3px solid #ffffff;
 	border-radius: 999px;
-	background: var(--garden-entity-color, #7c8a80);
-	box-shadow: 0 0 0 2px color-mix(in srgb, var(--garden-entity-color, #7c8a80) 42%, transparent), 0 6px 14px rgba(27, 38, 32, 0.18);
+	background: var(--garden-entity-color);
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--garden-entity-color) 42%, transparent), 0 6px 14px rgba(27, 38, 32, 0.18);
 }
 
 .garden-detail-card {
@@ -2428,7 +2430,7 @@ section[data-panel="dashboard"] .section-header,
 
 .dashboard-weather-layout {
 	display: grid;
-	grid-template-areas: "left radar right";
+	grid-template-areas: "wg-left wg-radar wg-right";
 	grid-template-columns: minmax(18.75rem, 20.75rem) minmax(42rem, 1fr) minmax(18.75rem, 20.75rem);
 	align-items: start;
 	gap: clamp(0.75rem, 1vw, 1rem);
@@ -2437,16 +2439,16 @@ section[data-panel="dashboard"] .section-header,
 }
 
 .dashboard-column-left {
-	grid-area: left;
+	grid-area: wg-left;
 }
 
 .dashboard-radar-stage {
-	grid-area: radar;
+	grid-area: wg-radar;
 	min-width: 0;
 }
 
 .dashboard-column-right {
-	grid-area: right;
+	grid-area: wg-right;
 }
 
 .dashboard-column {
@@ -2744,8 +2746,8 @@ body[data-active-panel="dashboard"] .panel-nav {
 	position: absolute;
 	top: 50%;
 	left: 50%;
-	width: var(--ring-size);
-	height: var(--ring-size);
+	width: var(--radar-ring-size);
+	height: var(--radar-ring-size);
 	border: 1px solid rgba(30, 36, 32, 0.18);
 	border-radius: 50%;
 	transform: translate(-50%, -50%);
@@ -2914,8 +2916,8 @@ body[data-active-panel="dashboard"] .panel-nav {
 @media (max-width: 1120px) {
 	.dashboard-weather-layout {
 		grid-template-areas:
-			"radar radar"
-			"left right";
+			"wg-radar wg-radar"
+			"wg-left wg-right";
 		grid-template-columns: minmax(0, 1fr) minmax(18rem, 20rem);
 	}
 
@@ -2927,9 +2929,9 @@ body[data-active-panel="dashboard"] .panel-nav {
 @media (max-width: 860px) {
 	.dashboard-weather-layout {
 		grid-template-areas:
-			"left"
-			"radar"
-			"right";
+			"wg-left"
+			"wg-radar"
+			"wg-right";
 		grid-template-columns: minmax(0, 1fr);
 	}
 
