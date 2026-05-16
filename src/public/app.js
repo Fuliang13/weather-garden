@@ -153,6 +153,7 @@ const els = {
   rainMeta: document.querySelector("#rainMeta"),
   stationCard: document.querySelector("#stationCard"),
   stationSource: document.querySelector("#stationSource"),
+  stationStateBadge: document.querySelector("#stationStateBadge"),
   stationTemperature: document.querySelector("#stationTemperature"),
   stationHumidity: document.querySelector("#stationHumidity"),
   stationWind: document.querySelector("#stationWind"),
@@ -862,7 +863,9 @@ function renderStationObservation(station) {
   if (!station?.current) {
     els.stationCard.hidden = false;
     els.stationCard.dataset.stale = "true";
+    els.stationCard.dataset.state = "unavailable";
     els.stationSource.textContent = "Observation locale indisponible";
+    renderStationStateBadge("Indisponible", "unavailable");
     els.stationTemperature.textContent = "—";
     els.stationHumidity.textContent = "—";
     els.stationWind.textContent = "—";
@@ -876,7 +879,9 @@ function renderStationObservation(station) {
   const current = station.current;
   els.stationCard.hidden = false;
   els.stationCard.dataset.stale = String(!!station.stale);
-  els.stationSource.textContent = `${station.label || uiText("@{%Station météo%}")}${station.updatedAt ? ` · ${formatDate(station.updatedAt)}` : ""}${station.stale ? " · données anciennes" : ""}`;
+  els.stationCard.dataset.state = station.stale ? "stale" : "fresh";
+  els.stationSource.textContent = formatStationSourceLine(station);
+  renderStationStateBadge(station.stale ? "Ancien" : "", station.stale ? "stale" : "fresh");
   els.stationTemperature.textContent = formatTemperature(current.temperatureC);
   els.stationHumidity.textContent = formatValue(current.humidityPct, "%");
   els.stationWind.textContent = formatWind(current.windKmh);
@@ -884,6 +889,59 @@ function renderStationObservation(station) {
   els.stationPressure.textContent = formatStationFreshness(station);
   els.stationRain.textContent = `${formatRainRate(current.rainRateMmPerHour)} · jour ${formatRain(current.dailyRainMm)}`;
   els.stationUv.textContent = `${formatValue(current.uvIndex, "")} · ${formatValue(current.solarWm2, "W/m²")}`;
+}
+
+function renderStationStateBadge(label, stateName) {
+  if (!els.stationStateBadge) {
+    return;
+  }
+
+  els.stationStateBadge.hidden = !label;
+  els.stationStateBadge.textContent = label;
+  els.stationStateBadge.dataset.state = stateName || "fresh";
+}
+
+function formatStationSourceLine(station) {
+  const label = formatStationDisplayLabel(station);
+
+  if (station?.stale) {
+    return `${label} · données anciennes`;
+  }
+
+  const ageLabel = formatStationAge(station);
+  return ageLabel ? `${label} · ${ageLabel}` : label;
+}
+
+function formatStationDisplayLabel(station) {
+  const label = station?.label || uiText("@{%Station météo%}");
+
+  if (station?.source === "ecowitt" && !label.toLowerCase().includes("ecowitt")) {
+    return `${label} Ecowitt`;
+  }
+
+  return label;
+}
+
+function formatStationAge(station) {
+  if (Number.isFinite(station?.freshnessMinutes)) {
+    return formatDuration(Math.round(station.freshnessMinutes));
+  }
+
+  if (Number.isFinite(station?.ageMinutes)) {
+    return formatDuration(Math.round(station.ageMinutes));
+  }
+
+  if (!station?.updatedAt) {
+    return "";
+  }
+
+  const updatedTime = new Date(station.updatedAt).getTime();
+
+  if (!Number.isFinite(updatedTime)) {
+    return "";
+  }
+
+  return formatDuration(Math.max(0, Math.round((Date.now() - updatedTime) / 60_000)));
 }
 
 function renderCurrentForecast(current) {

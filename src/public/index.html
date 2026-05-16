@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Weather Garden</title>
   <link rel="stylesheet" href="/assets/vendor/leaflet/leaflet.css">
-  <link rel="stylesheet" href="/style.css?v=20260516-map-layers">
+  <link rel="stylesheet" href="/style.css?v=20260516-station-conditions-ui">
 </head>
 <body>
   <main class="app-shell">
@@ -36,16 +36,19 @@
 
           <article id="stationCard" class="card dashboard-block dashboard-block-station">
             <h2>Conditions actuelles</h2>
-            <p id="stationSource" class="card-note muted">Station météo</p>
-            <dl class="metrics metrics-wide">
-              <div><dt>Température</dt><dd id="stationTemperature">&mdash;</dd></div>
-              <div><dt>Humidité</dt><dd id="stationHumidity">&mdash;</dd></div>
-              <div><dt>Vent moyen</dt><dd id="stationWind">&mdash;</dd></div>
-              <div><dt>Rafales</dt><dd id="stationGust">&mdash;</dd></div>
-              <div><dt>Pluie observée</dt><dd id="stationRain">&mdash;</dd></div>
-              <div><dt>Fraîcheur</dt><dd id="stationPressure">&mdash;</dd></div>
-              <div class="dashboard-secondary-metric"><dt>UV / solaire</dt><dd id="stationUv">&mdash;</dd></div>
+            <dl class="metrics metrics-wide station-metrics">
+              <div class="station-metric" data-station-metric="temperature"><dt>Température</dt><dd id="stationTemperature">&mdash;</dd></div>
+              <div class="station-metric" data-station-metric="humidity"><dt>Humidité</dt><dd id="stationHumidity">&mdash;</dd></div>
+              <div class="station-metric" data-station-metric="wind"><dt>Vent moyen</dt><dd id="stationWind">&mdash;</dd></div>
+              <div class="station-metric" data-station-metric="gust"><dt>Rafales</dt><dd id="stationGust">&mdash;</dd></div>
+              <div class="station-metric" data-station-metric="rain"><dt>Pluie observée</dt><dd id="stationRain">&mdash;</dd></div>
+              <div class="station-metric" data-station-metric="freshness"><dt>Âge donnée</dt><dd id="stationPressure">&mdash;</dd></div>
+              <div class="station-metric dashboard-secondary-metric" data-station-metric="sun"><dt>UV / solaire</dt><dd id="stationUv">&mdash;</dd></div>
             </dl>
+            <footer class="station-footer">
+              <p id="stationSource" class="card-note muted">Station météo</p>
+              <span id="stationStateBadge" class="station-state-badge" hidden></span>
+            </footer>
           </article>
 
           <article id="dashboardAlertsCard" class="card dashboard-block dashboard-block-alerts">
@@ -437,6 +440,6 @@
   </main>
 
   <script src="/assets/vendor/leaflet/leaflet.js"></script>
-  <script src="/app.js?v=20260516-map-layers" type="module"></script>
+  <script src="/app.js?v=20260516-station-conditions-ui" type="module"></script>
 </body>
 </html>

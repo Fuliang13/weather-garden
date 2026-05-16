@@ -2285,7 +2285,7 @@ section[data-panel="dashboard"] .section-header,
 .dashboard-block-station {
 	--dashboard-card-tint: #e7f2f7;
 	order: 2;
-	border-top: 3px solid color-mix(in srgb, var(--wet) 78%, white);
+	border-top: 2px solid color-mix(in srgb, var(--wet) 54%, var(--border));
 }
 
 .dashboard-block-forecast {
@@ -2674,6 +2674,131 @@ body[data-active-panel="dashboard"] .panel-nav {
 	font-size: 0.98rem;
 	font-weight: 760;
 	line-height: 1.18;
+}
+
+.dashboard-block-station {
+	padding: 0.88rem;
+	background: linear-gradient(180deg, var(--card), color-mix(in srgb, #e7f2f7 18%, white));
+	box-shadow: 0 7px 18px rgba(27, 38, 32, 0.045);
+}
+
+.dashboard-block-station h2 {
+	margin-bottom: 0.55rem;
+}
+
+.station-metrics {
+	gap: 0.48rem;
+}
+
+.dashboard-column .station-metric {
+	position: relative;
+	display: grid;
+	min-height: 3.2rem;
+	grid-template-columns: 1.55rem minmax(0, 1fr);
+	grid-template-areas:
+		"icon label"
+		"icon value";
+	column-gap: 0.5rem;
+	align-items: center;
+	border-color: color-mix(in srgb, var(--border) 66%, white);
+	border-radius: 0.78rem;
+	background: color-mix(in srgb, var(--soft) 28%, white);
+	padding: 0.54rem 0.58rem;
+}
+
+.station-metric::before {
+	grid-area: icon;
+	display: grid;
+	width: 1.35rem;
+	height: 1.35rem;
+	place-items: center;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--wet) 10%, white);
+	color: color-mix(in srgb, var(--wet) 78%, var(--text));
+	font-size: 0.64rem;
+	font-weight: 820;
+	line-height: 1;
+}
+
+.station-metric[data-station-metric="temperature"]::before {
+	content: "T°";
+}
+
+.station-metric[data-station-metric="humidity"]::before {
+	content: "%";
+}
+
+.station-metric[data-station-metric="wind"]::before {
+	content: "→";
+}
+
+.station-metric[data-station-metric="gust"]::before {
+	content: "↯";
+}
+
+.station-metric[data-station-metric="rain"]::before {
+	content: "mm";
+}
+
+.station-metric[data-station-metric="freshness"]::before {
+	content: "↻";
+}
+
+.station-metric[data-station-metric="sun"]::before {
+	content: "UV";
+}
+
+.station-metric dt {
+	grid-area: label;
+	font-size: 0.68rem;
+	line-height: 1.1;
+}
+
+.station-metric dd {
+	grid-area: value;
+	font-size: 0.94rem;
+	line-height: 1.12;
+}
+
+.station-footer {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.6rem;
+	margin-top: 0.62rem;
+}
+
+.station-footer .card-note {
+	min-width: 0;
+	margin: 0;
+	font-size: 0.76rem;
+	line-height: 1.25;
+}
+
+.station-state-badge {
+	display: inline-flex;
+	align-items: center;
+	border: 1px solid color-mix(in srgb, var(--border) 70%, white);
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--soft) 62%, white);
+	color: var(--muted);
+	font-size: 0.68rem;
+	font-weight: 800;
+	line-height: 1;
+	padding: 0.22rem 0.45rem;
+	white-space: nowrap;
+}
+
+.station-state-badge[data-state="stale"] {
+	border-color: color-mix(in srgb, var(--warn) 52%, var(--border));
+	background: #fff4dd;
+	color: #8a5a10;
+}
+
+.station-state-badge[data-state="unavailable"] {
+	border-color: color-mix(in srgb, var(--danger) 34%, var(--border));
+	background: #fbeaec;
+	color: var(--danger);
 }
 
 .dashboard-block-alerts {
