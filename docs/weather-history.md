@@ -82,3 +82,69 @@ Chaque entrée de `samples` suit cette structure :
 - Pas de modèle ML.
 - Pas de graphique historique.
 - Pas de stockage radar métier lourd.
+
+## Patch 2 — Endpoint debug historique
+
+Endpoint ajouté :
+
+- `GET /api/debug/weather-history`
+
+Cet endpoint retourne un diagnostic compact du stockage `weather_history_recent`. Il ne retourne jamais les samples complets, les payloads météo bruts, les URLs radar, les secrets, les tokens, les headers d’authentification, les MAC complets ou les IMEI complets.
+
+Réponse type :
+
+```json
+{
+  "ok": true,
+  "storage": {
+    "key": "weather_history_recent",
+    "exists": true,
+    "corrupted": false
+  },
+  "history": {
+    "version": 1,
+    "sampleCount": 2,
+    "maxSamples": 72,
+    "firstSampleAt": "2026-05-16T12:00:00.000Z",
+    "lastSampleAt": "2026-05-16T13:00:00.000Z",
+    "lastUpdatedAt": "2026-05-16T13:00:00.000Z",
+    "retentionHoursApprox": 1
+  },
+  "sources": {
+    "openMeteo": 2,
+    "ecowitt": 2,
+    "meteofranceRadar": 2,
+    "rainViewer": 2
+  },
+  "confidence": {
+    "low": 0,
+    "medium": 2,
+    "high": 0,
+    "unknown": 0
+  },
+  "freshness": {
+    "fresh": 2,
+    "stale": 0,
+    "unavailable": 0,
+    "unknown": 0
+  },
+  "diagnostics": {
+    "kvReadable": true,
+    "lastSampleTooRecentSkips": 0
+  }
+}
+```
+
+### États gérés
+
+- Clé absente : `ok: true`, `storage.exists: false`, `sampleCount: 0`.
+- Historique vide : `ok: true`, `storage.exists: true`, `sampleCount: 0`, timestamps de samples à `null`.
+- JSON corrompu : `ok: false`, `storage.corrupted: true`, message explicite, aucun contenu brut renvoyé.
+- KV indisponible : `ok: false`, `diagnostics.kvReadable: false`, sans exception Worker.
+
+### Limites Patch 2
+
+- Pas d’API utilisateur publique d’historique.
+- Pas d’affichage frontend.
+- Pas d’export des samples.
+- Pas de compteur persistant des skips récents : `lastSampleTooRecentSkips` reste à `0` tant qu’aucun stockage de métrique dédiée n’est ajouté.

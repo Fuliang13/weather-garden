@@ -4,6 +4,16 @@ Ce fichier doit être mis à jour à chaque patch livré.
 
 ## Non publié
 
+### Diagnostic historique météo
+
+- Ajout de l’endpoint `GET /api/debug/weather-history`.
+- Diagnostic compact du stockage KV `weather_history_recent` : présence de la clé, corruption éventuelle, nombre d’échantillons, timestamps extrêmes, rétention approximative, sources, niveaux de confiance et fraîcheur.
+- L’endpoint ne retourne aucun sample complet, aucun payload source brut, aucun secret, aucun token, aucun header d’authentification, aucun MAC/IMEI complet et aucune URL signée.
+- Gestion explicite des cas KV absent, clé absente, historique vide et JSON corrompu.
+- Aucun impact UI, aucun stockage supplémentaire, aucun changement sur `/api/status` ou `/api/refresh`.
+- Ajout de tests Vitest couvrant endpoint, KV vide/absent/corrompu, historique valide et non-exposition de données sensibles.
+- Limite assumée : `lastSampleTooRecentSkips` est exposé à `0` tant qu’aucune métrique persistante dédiée n’existe.
+
 ### Socle historique météo / WGF
 
 - Ajout d’un premier module d’historique météo public-safe avec `src/weatherHistory.js`.

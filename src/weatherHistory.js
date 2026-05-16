@@ -75,6 +75,71 @@ export async function persistWeatherHistorySample({
   };
 }
 
+export async function buildWeatherHistoryDebugReport({
+  kv,
+  key = WEATHER_HISTORY_RECENT_KEY,
+  limit = DEFAULT_WEATHER_HISTORY_LIMIT
+} = {}) {
+  const report = createEmptyHistoryDebugReport(key, limit);
+
+  if (!kv || typeof kv.get !== "function") {
+    report.ok = false;
+    report.storage.error = "KV binding is not available.";
+    report.diagnostics.kvReadable = false;
+    return report;
+  }
+
+  let raw;
+
+  try {
+    raw = await kv.get(key);
+    report.diagnostics.kvReadable = true;
+  } catch (_error) {
+    report.ok = false;
+    report.storage.error = "Weather history KV could not be read.";
+    report.diagnostics.kvReadable = false;
+    return report;
+  }
+
+  if (!raw) {
+    return report;
+  }
+
+  report.storage.exists = true;
+
+  const parsed = parseHistoryPayload(raw);
+
+  if (!parsed.ok) {
+    report.ok = false;
+    report.storage.corrupted = true;
+    report.storage.error = "Weather history JSON is corrupted.";
+    return report;
+  }
+
+  const history = parsed.value;
+
+  if (!history || typeof history !== "object") {
+    report.ok = false;
+    report.storage.corrupted = true;
+    report.storage.error = "Weather history JSON is corrupted.";
+    return report;
+  }
+
+  const samples = normalizeSamples(Array.isArray(history) ? history : history.samples);
+
+  report.history.version = finiteOrNull(history.version) || WEATHER_HISTORY_SCHEMA_VERSION;
+  report.history.sampleCount = samples.length;
+  report.history.firstSampleAt = samples[0]?.generatedAt || null;
+  report.history.lastSampleAt = samples[samples.length - 1]?.generatedAt || null;
+  report.history.lastUpdatedAt = history.updatedAt || report.history.lastSampleAt;
+  report.history.retentionHoursApprox = computeRetentionHours(report.history.firstSampleAt, report.history.lastSampleAt);
+  report.sources = countSources(samples);
+  report.confidence = countFieldValues(samples, (sample) => sample.confidence, ["low", "medium", "high", "unknown"]);
+  report.freshness = countFieldValues(samples, (sample) => sample.freshness?.state, ["fresh", "stale", "unavailable", "unknown"]);
+
+  return report;
+}
+
 async function readRecentWeatherHistory(kv, key) {
   try {
     const stored = await kv.get(key, "json");
@@ -96,6 +161,145 @@ async function readRecentWeatherHistory(kv, key) {
 function normalizeSamples(samples) {
   return (Array.isArray(samples) ? samples : [])
     .filter((sample) => sample && typeof sample === "object" && sample.type === "weather-history-sample");
+}
+
+function createEmptyHistoryDebugReport(key, limit) {
+  return {
+    ok: true,
+    storage: {
+      key,
+      exists: false,
+      corrupted: false
+    },
+    history: {
+      version: WEATHER_HISTORY_SCHEMA_VERSION,
+      sampleCount: 0,
+      maxSamples: safeLimit(limit),
+      firstSampleAt: null,
+      lastSampleAt: null,
+      lastUpdatedAt: null,
+      retentionHoursApprox: null
+    },
+    sources: {},
+    confidence: {
+      low: 0,
+      medium: 0,
+      high: 0,
+      unknown: 0
+    },
+    freshness: {
+      fresh: 0,
+      stale: 0,
+      unavailable: 0,
+      unknown: 0
+    },
+    diagnostics: {
+      kvReadable: false,
+      lastSampleTooRecentSkips: 0
+    }
+  };
+}
+
+function parseHistoryPayload(raw) {
+  if (typeof raw === "string") {
+    try {
+      return { ok: true, value: JSON.parse(raw) };
+    } catch (_error) {
+      return { ok: false, value: null };
+    }
+  }
+
+  if (raw && typeof raw === "object") {
+    return { ok: true, value: raw };
+  }
+
+  return { ok: false, value: null };
+}
+
+function countSources(samples) {
+  const counts = {};
+
+  for (const sample of samples) {
+    for (const source of collectSampleSourceKeys(sample)) {
+      counts[source] = (counts[source] || 0) + 1;
+    }
+  }
+
+  return counts;
+}
+
+function collectSampleSourceKeys(sample) {
+  const keys = new Set();
+
+  for (const source of Array.isArray(sample.sources) ? sample.sources : []) {
+    addNormalizedSourceKey(keys, source.id || source.source);
+  }
+
+  addNormalizedSourceKey(keys, sample.observation?.source);
+  addNormalizedSourceKey(keys, sample.radarSummary?.provider);
+  addNormalizedSourceKey(keys, sample.radarSummary?.fallbackProvider);
+
+  return keys;
+}
+
+function addNormalizedSourceKey(keys, value) {
+  const key = normalizeSourceKey(value);
+
+  if (key) {
+    keys.add(key);
+  }
+}
+
+function normalizeSourceKey(value) {
+  const source = String(value || "").toLowerCase();
+
+  if (source.includes("open-meteo") || source.includes("arome")) {
+    return "openMeteo";
+  }
+
+  if (source.includes("met-norway") || source.includes("metnorway")) {
+    return "metNorway";
+  }
+
+  if (source.includes("ecowitt")) {
+    return "ecowitt";
+  }
+
+  if (source.includes("meteofrance") || source.includes("meteo-france")) {
+    return "meteofranceRadar";
+  }
+
+  if (source.includes("rainviewer")) {
+    return "rainViewer";
+  }
+
+  return null;
+}
+
+function countFieldValues(samples, pickValue, keys) {
+  const counts = Object.fromEntries(keys.map((key) => [key, 0]));
+
+  for (const sample of samples) {
+    const value = keys.includes(pickValue(sample)) ? pickValue(sample) : "unknown";
+    counts[value] = (counts[value] || 0) + 1;
+  }
+
+  return counts;
+}
+
+function computeRetentionHours(firstIso, lastIso) {
+  if (!firstIso || !lastIso) {
+    return null;
+  }
+
+  const firstMs = Date.parse(firstIso);
+  const lastMs = Date.parse(lastIso);
+
+  if (!Number.isFinite(firstMs) || !Number.isFinite(lastMs)) {
+    return null;
+  }
+
+  return Math.round(Math.max(0, lastMs - firstMs) / 36_000) / 100;
 }
 
 function buildObservationSample(status) {

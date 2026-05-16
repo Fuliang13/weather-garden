@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/worker.js";
 import {
   WEATHER_HISTORY_RECENT_KEY,
+  buildWeatherHistoryDebugReport,
   buildWeatherHistorySample,
   persistWeatherHistorySample
 } from "../src/weatherHistory.js";
@@ -141,6 +142,168 @@ describe("weather history", () => {
     });
 
     expect(result).toMatchObject({ ok: false, stored: false, reason: "kv-unavailable" });
+  });
+
+
+  it("reports an absent history key as an empty debug payload", async () => {
+    const report = await buildWeatherHistoryDebugReport({ kv: new MemoryKV() });
+
+    expect(report).toMatchObject({
+      ok: true,
+      storage: {
+        key: WEATHER_HISTORY_RECENT_KEY,
+        exists: false,
+        corrupted: false
+      },
+      history: {
+        sampleCount: 0,
+        maxSamples: 72,
+        firstSampleAt: null,
+        lastSampleAt: null,
+        lastUpdatedAt: null,
+        retentionHoursApprox: null
+      },
+      diagnostics: {
+        kvReadable: true
+      }
+    });
+  });
+
+  it("reports an empty stored history without throwing", async () => {
+    const kv = new MemoryKV();
+    await kv.put(WEATHER_HISTORY_RECENT_KEY, JSON.stringify({
+      version: 1,
+      updatedAt: "2026-05-16T12:00:00.000Z",
+      samples: []
+    }));
+
+    const report = await buildWeatherHistoryDebugReport({ kv });
+
+    expect(report).toMatchObject({
+      ok: true,
+      storage: { exists: true, corrupted: false },
+      history: {
+        sampleCount: 0,
+        firstSampleAt: null,
+        lastSampleAt: null,
+        lastUpdatedAt: "2026-05-16T12:00:00.000Z"
+      }
+    });
+  });
+
+  it("reports unavailable KV for history debug without throwing", async () => {
+    const report = await buildWeatherHistoryDebugReport({ kv: null });
+
+    expect(report).toMatchObject({
+      ok: false,
+      storage: {
+        exists: false,
+        corrupted: false,
+        error: "KV binding is not available."
+      },
+      history: { sampleCount: 0 },
+      diagnostics: { kvReadable: false }
+    });
+  });
+
+  it("reports corrupted history without exposing raw content", async () => {
+    const kv = new MemoryKV();
+    kv.map.set(WEATHER_HISTORY_RECENT_KEY, "not-json application_key=secret-token api_key=other-secret AA:BB:CC:DD:EE:FF");
+
+    const report = await buildWeatherHistoryDebugReport({ kv });
+    const serialized = JSON.stringify(report);
+
+    expect(report).toMatchObject({
+      ok: false,
+      storage: {
+        exists: true,
+        corrupted: true,
+        error: "Weather history JSON is corrupted."
+      },
+      history: { sampleCount: 0 },
+      diagnostics: { kvReadable: true }
+    });
+    expect(serialized).not.toContain("secret-token");
+    expect(serialized).not.toContain("other-secret");
+    expect(serialized).not.toContain("AA:BB:CC:DD:EE:FF");
+  });
+
+  it("summarizes valid history without returning samples", async () => {
+    const kv = new MemoryKV();
+    await persistWeatherHistorySample({
+      kv,
+      status: buildStatus("2026-05-16T12:00:00.000Z"),
+      now: new Date("2026-05-16T12:00:00.000Z"),
+      minIntervalMinutes: 0
+    });
+    await persistWeatherHistorySample({
+      kv,
+      status: buildStatus("2026-05-16T13:00:00.000Z"),
+      now: new Date("2026-05-16T13:00:00.000Z"),
+      minIntervalMinutes: 0
+    });
+
+    const report = await buildWeatherHistoryDebugReport({ kv });
+    const serialized = JSON.stringify(report);
+
+    expect(report).toMatchObject({
+      ok: true,
+      storage: { exists: true, corrupted: false },
+      history: {
+        version: 1,
+        sampleCount: 2,
+        maxSamples: 72,
+        firstSampleAt: "2026-05-16T12:00:00.000Z",
+        lastSampleAt: "2026-05-16T13:00:00.000Z",
+        lastUpdatedAt: "2026-05-16T13:00:00.000Z",
+        retentionHoursApprox: 1
+      },
+      sources: {
+        openMeteo: 2,
+        ecowitt: 2,
+        meteofranceRadar: 2,
+        rainViewer: 2
+      },
+      confidence: { medium: 2 },
+      freshness: { fresh: 2 },
+      diagnostics: { kvReadable: true }
+    });
+    expect(serialized).not.toContain("samples");
+    expect(serialized).not.toContain("weather-history-sample");
+    expect(serialized).not.toContain("secret-token");
+    expect(serialized).not.toContain("rainviewer-token");
+    expect(serialized).not.toContain("AA:BB:CC:DD:EE:FF");
+    expect(serialized).not.toContain("863879049793071");
+  });
+
+  it("exposes the weather history debug endpoint", async () => {
+    const kv = new MemoryKV();
+    await persistWeatherHistorySample({
+      kv,
+      status: buildStatus("2026-05-16T12:00:00.000Z"),
+      now: new Date("2026-05-16T12:00:00.000Z")
+    });
+
+    const response = await worker.fetch(new Request("https://example.com/api/debug/weather-history"), {
+      WEATHER_KV: kv
+    }, {
+      waitUntil() {}
+    });
+    const body = await response.json();
+    const serialized = JSON.stringify(body);
+
+    expect(response.ok).toBe(true);
+    expect(body).toMatchObject({
+      ok: true,
+      storage: { key: WEATHER_HISTORY_RECENT_KEY, exists: true, corrupted: false },
+      history: { sampleCount: 1 },
+      sources: { openMeteo: 1 },
+      diagnostics: { kvReadable: true }
+    });
+    expect(serialized).not.toContain("weather-history-sample");
+    expect(serialized).not.toContain("application_key");
+    expect(serialized).not.toContain("api_key");
+    expect(serialized).not.toContain("secret-token");
   });
 
   it("writes history after a successful refresh without breaking the response", async () => {

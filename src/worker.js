@@ -4,7 +4,7 @@ import { debugMeteoFranceHdf5, debugMeteoFranceRadar, fetchMeteoFranceRadar, fet
 import { fetchEcowittDiagnostics, fetchEcowittObservation } from "./sources/ecowitt.js";
 import { DEFAULT_LOCATION, DEFAULT_SETTINGS, buildWeatherStatus, mergeSettings } from "./scoring.js";
 import { buildGardenStatus, createDefaultGardenState, deleteGardenEntity, normalizeGardenState, upsertGardenEntity } from "./garden.js";
-import { WEATHER_HISTORY_RECENT_KEY, persistWeatherHistorySample } from "./weatherHistory.js";
+import { WEATHER_HISTORY_RECENT_KEY, buildWeatherHistoryDebugReport, persistWeatherHistorySample } from "./weatherHistory.js";
 
 const KV_KEYS = {
   settings: "settings",
@@ -31,6 +31,13 @@ export default {
 
       if (url.pathname === "/api/debug/status" && request.method === "GET") {
         return json(await getDebugStatus(env));
+      }
+
+      if (url.pathname === "/api/debug/weather-history" && request.method === "GET") {
+        return json(await buildWeatherHistoryDebugReport({
+          kv: env.WEATHER_KV,
+          key: KV_KEYS.weatherHistoryRecent
+        }));
       }
 
       if (url.pathname === "/api/debug/sources" && request.method === "GET") {
@@ -176,6 +183,7 @@ async function getDebugStatus(env) {
       "/api/status",
       "/api/refresh",
       "/api/debug/status",
+      "/api/debug/weather-history",
       "/api/debug/sources",
       "/api/debug/meteofrance",
       "/api/debug/meteofrance/hdf5",
