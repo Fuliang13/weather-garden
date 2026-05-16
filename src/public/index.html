@@ -27,14 +27,20 @@
 
     <section data-panel="dashboard">
       <section id="alertCard" class="card alert-card dashboard-block dashboard-block-rain">
-        <h2>Pluie</h2>
-        <p id="rainSummary" class="summary">Calcul en cours…</p>
-        <p id="rainEta" class="muted"></p>
-        <p id="rainDetail" class="rain-detail"></p>
+        <div class="rain-card-main">
+          <div>
+            <h2>Pluie</h2>
+            <p id="rainSummary" class="summary">Calcul en cours…</p>
+          </div>
+          <div class="rain-card-status">
+            <p id="rainEta" class="muted"></p>
+            <p id="rainDetail" class="rain-detail"></p>
+          </div>
+        </div>
         <div id="rainMeta" class="alert-meta"></div>
       </section>
 
-      <section class="grid">
+      <section class="grid dashboard-quick-grid">
         <article id="stationCard" class="card dashboard-block dashboard-block-station" hidden>
           <h2>Observation station</h2>
           <p id="stationSource" class="card-note muted">Station météo</p>
@@ -43,9 +49,9 @@
             <div><dt>Humidité</dt><dd id="stationHumidity">—</dd></div>
             <div><dt>Vent</dt><dd id="stationWind">—</dd></div>
             <div><dt>Rafales</dt><dd id="stationGust">—</dd></div>
-            <div><dt>Pression</dt><dd id="stationPressure">—</dd></div>
             <div><dt>Pluie</dt><dd id="stationRain">—</dd></div>
-            <div><dt>UV / solaire</dt><dd id="stationUv">—</dd></div>
+            <div><dt>Fraîcheur</dt><dd id="stationPressure">—</dd></div>
+            <div class="dashboard-secondary-metric"><dt>UV / solaire</dt><dd id="stationUv">—</dd></div>
           </dl>
         </article>
 

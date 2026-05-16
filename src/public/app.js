@@ -522,19 +522,26 @@ function renderStatus(status) {
 function renderRainMeta(rain) {
   els.rainMeta.innerHTML = "";
 
-  if (isNoSignificantRain(rain)) {
-    els.rainMeta.hidden = true;
-    return;
-  }
+  const horizon = rain.horizons?.[0];
+  const horizonScore = Number.isFinite(horizon?.score) ? Math.round(horizon.score * 100) : 0;
+  const sourceLabel = rain.observation?.source === "station" ? "station locale" : "prévision";
+  const items = isNoSignificantRain(rain)
+    ? [
+      { label: "État", value: rain.noRainWindowMinutes ? `sec ${formatDuration(rain.noRainWindowMinutes)}` : "temps sec" },
+      { label: "Risque", value: horizon ? `${horizonScore} % à ${formatDuration(horizon.minutes)}` : "faible" },
+      { label: "Source", value: sourceLabel },
+      { label: "Fraîcheur", value: "synthèse actuelle" }
+    ]
+    : [
+      { label: "Intensité", value: `${rain.intensityLabel} · ${formatRainRate(rain.intensityMmPerHour)}` },
+      { label: "Risque", value: `${rain.riskLabel} · ${horizonScore} % à ${horizon ? formatDuration(horizon.minutes) : "30 min"}` },
+      { label: "Durée", value: rain.expectedDurationMinutes ? formatDuration(rain.expectedDurationMinutes) : "à surveiller" },
+      { label: "Source", value: sourceLabel }
+    ];
 
   els.rainMeta.hidden = false;
 
-  [
-    { label: "Intensité", value: `${rain.intensityLabel} · ${formatRainRate(rain.intensityMmPerHour)}` },
-    { label: "Risque", value: `${rain.riskLabel} · ${rain.horizons?.[0] ? Math.round(rain.horizons[0].score * 100) : 0} % à 30 min` },
-    { label: "Durée", value: rain.expectedDurationMinutes ? formatDuration(rain.expectedDurationMinutes) : "non déterminée" },
-    { label: "Source", value: rain.observation?.source === "station" ? "station locale" : "prévision" }
-  ].forEach((item) => {
+  items.forEach((item) => {
     const pill = document.createElement("span");
     pill.className = "meta-pill";
     pill.innerHTML = `<strong>${item.label}</strong>${item.value}`;
@@ -572,7 +579,7 @@ function renderStationObservation(station) {
   els.stationHumidity.textContent = formatValue(current.humidityPct, "%");
   els.stationWind.textContent = formatWind(current.windKmh);
   els.stationGust.textContent = formatWind(current.gustKmh);
-  els.stationPressure.textContent = formatPressure(current.pressureHpa);
+  els.stationPressure.textContent = formatStationFreshness(station);
   els.stationRain.textContent = `${formatRainRate(current.rainRateMmPerHour)} · jour ${formatRain(current.dailyRainMm)}`;
   els.stationUv.textContent = `${formatValue(current.uvIndex, "")} · ${formatValue(current.solarWm2, "W/m²")}`;
 }
@@ -587,24 +594,46 @@ function renderCurrentForecast(current) {
 
 function renderHorizons(horizons, noSignificantRain) {
   els.horizons.innerHTML = "";
-  els.horizonsCard.hidden = noSignificantRain;
 
-  if (noSignificantRain) {
-    return;
-  }
+  const compactHorizons = getCompactRainHorizons(horizons);
+  els.horizonsCard.hidden = !compactHorizons.length;
 
-  horizons.forEach((item) => {
+  compactHorizons.forEach((item) => {
     const row = document.createElement("div");
     row.className = "horizon-row";
-    row.dataset.level = item.alertLevel;
+    row.dataset.level = noSignificantRain ? "none" : item.alertLevel;
     row.innerHTML = `
       <strong>${formatDuration(item.minutes)}</strong>
-      <span>${item.intensityLabel}</span>
+      <span>${noSignificantRain ? "Sec" : item.intensityLabel}</span>
       <span>${formatRainRate(item.intensityMmPerHour)}</span>
       <span>${formatRain(item.precipitationMm)}</span>
     `;
     els.horizons.append(row);
   });
+}
+
+function getCompactRainHorizons(horizons) {
+  const preferredMinutes = [30, 60, 120, 360];
+  const byMinutes = new Map((horizons || []).map((item) => [item.minutes, item]));
+  const selected = preferredMinutes.map((minutes) => byMinutes.get(minutes)).filter(Boolean);
+
+  return selected.length ? selected : (horizons || []).slice(0, 4);
+}
+
+function formatStationFreshness(station) {
+  if (Number.isFinite(station.freshnessMinutes)) {
+    return formatDuration(Math.round(station.freshnessMinutes));
+  }
+
+  if (Number.isFinite(station.ageMinutes)) {
+    return formatDuration(Math.round(station.ageMinutes));
+  }
+
+  if (station.stale || station.state === "stale") {
+    return "Ancien";
+  }
+
+  return station.updatedAt ? "OK" : "—";
 }
 
 function renderForecastComparison(comparison) {
