@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Weather Garden</title>
   <link rel="stylesheet" href="/assets/vendor/leaflet/leaflet.css">
-  <link rel="stylesheet" href="/style.css?v=20260516-station-conditions-refine">
+  <link rel="stylesheet" href="/style.css?v=20260516-radar-premium-refine">
 </head>
 <body>
   <main class="app-shell">
@@ -76,18 +76,14 @@
                   </select>
                 </label>
                 <button id="radarRefreshButton" type="button" class="secondary">Actualiser</button>
+                <button id="radarLayersButton" type="button" class="secondary radar-layers-button" aria-expanded="false" aria-controls="radarLayerPanel">Couches</button>
               </div>
             </div>
-            <div class="radar-meta-strip" aria-label="État radar">
-              <span><strong>Source</strong><span id="radarSourceLabel">&mdash;</span></span>
-              <span><strong>Validité</strong><span id="radarValidity">&mdash;</span></span>
-              <span><strong>Fraîcheur</strong><span id="radarFreshness">&mdash;</span></span>
-              <span><strong>Rayon</strong><span id="radarRadiusLabel">&mdash;</span></span>
-              <span id="radarFallbackLabel" class="radar-fallback-label" hidden>Fallback</span>
-            </div>
+            <p id="radarFallbackLabel" class="radar-fallback-label" hidden>Fallback</p>
             <div class="radar-map-shell">
               <div class="radar-map-frame">
                 <div id="radarMap" class="radar-map" role="img" aria-label="Radar pluie circulaire centré sur Louvigné-du-Désert"></div>
+                <div id="radarMapNotice" class="radar-map-notice" hidden></div>
                 <div id="radarDistanceRings" class="radar-distance-rings" aria-hidden="true"></div>
               </div>
             </div>
@@ -439,6 +435,6 @@
   </main>
 
   <script src="/assets/vendor/leaflet/leaflet.js"></script>
-  <script src="/app.js?v=20260516-station-conditions-refine" type="module"></script>
+  <script src="/app.js?v=20260516-radar-premium-refine" type="module"></script>
 </body>
 </html>

@@ -1,4 +1,5 @@
 const AUTO_REFRESH_MS = 5 * 60 * 1000;
+const RADAR_RADIUS_STEPS_KM = [10, 20, 40, 60, 80, 100, 120, 160];
 
 const GARDEN_ENTITY_COLORS = {
   zone: "#588157",
@@ -130,6 +131,7 @@ const state = {
   radarNativeLayer: null,
   radarMarker: null,
   radarDisplayModel: null,
+  radarRadiusControl: null,
   radarSourceMode: "auto",
   radarBaseLayerKey: "osm",
   radarZoomMode: "auto",
@@ -222,8 +224,10 @@ const els = {
   radarLegend: document.querySelector("#radarLegend"),
   radarAttribution: document.querySelector("#radarAttribution"),
   radarLayerPanel: document.querySelector("#radarLayerPanel"),
+  radarLayersButton: document.querySelector("#radarLayersButton"),
   radarSourceSelect: document.querySelector("#radarSourceSelect"),
   radarBaseLayerSelect: document.querySelector("#radarBaseLayerSelect"),
+  radarMapNotice: document.querySelector("#radarMapNotice"),
   radarModeSelect: document.querySelector("#radarModeSelect"),
   radarRefreshButton: document.querySelector("#radarRefreshButton"),
   radarZoomToggleButton: document.querySelector("#radarZoomToggleButton"),
@@ -301,6 +305,7 @@ els.gardenCadastreOverlay?.addEventListener("change", () => {
   updateGardenCadastreLayer();
 });
 els.radarAttribution?.addEventListener("click", toggleRadarLayerPanel);
+els.radarLayersButton?.addEventListener("click", toggleRadarLayerPanel);
 els.radarSourceSelect?.addEventListener("change", () => {
   state.radarSourceMode = normalizeRadarSourceMode(els.radarSourceSelect.value);
   renderRadar(state.status?.radar, state.status?.location, state.status?.rain || {});
@@ -2862,21 +2867,7 @@ function renderRadar(radar, location, rain = {}) {
   const model = buildRadarDisplayModel(radar, rain);
   state.radarDisplayModel = model;
 
-  if (model.nativeLayer) {
-    els.radarStatus.textContent = `${uiText("@{%Radar Météo-France natif affiché%}")}${model.validityTime ? ` · ${uiText("@{%donnée radar du%}")} ${formatDate(model.validityTime)}` : ""}.`;
-  } else if (model.rainViewerTileUrl) {
-    els.radarStatus.textContent = state.radarSourceMode === "rainviewer"
-      ? `${uiText("@{%RainViewer affiché%}")} · ${uiText("@{%image radar du%}")} ${formatDate(model.validityTime)}.`
-      : buildRainViewerFallbackText(radar?.meteoFrance, radar?.rainViewer);
-  } else if (state.radarSourceMode === "meteofrance") {
-    els.radarStatus.textContent = "Météo-France sélectionné, mais la couche native n'est pas exploitable pour ce refresh.";
-  } else if (state.radarSourceMode === "rainviewer") {
-    els.radarStatus.textContent = "RainViewer sélectionné, mais aucune tuile radar n'est disponible pour ce refresh.";
-  } else if (radar?.meteoFrance?.ok) {
-    els.radarStatus.textContent = `${uiText("@{%Radar Météo-France disponible, mais couche native non exploitable%}")}${radar.meteoFrance.diagnostics?.fallbackReason ? ` · ${radar.meteoFrance.diagnostics.fallbackReason}` : ""}.`;
-  } else {
-    els.radarStatus.textContent = uiText("@{%Aucun radar disponible pour le moment.%}");
-  }
+  els.radarStatus.textContent = buildRadarStatusText(model, radar);
 
   renderRadarMap(location, {
     nativeLayer: model.nativeLayer,
@@ -2884,10 +2875,39 @@ function renderRadar(radar, location, rain = {}) {
     radiusKm: model.radiusKm
   });
   renderRadarMetadata(model);
+  renderRadarMapNotice(model);
 
   els.radarLegend.hidden = false;
   els.radarLegend.dataset.hasRadar = String(!!model.nativeLayer || !!model.rainViewerTileUrl);
   renderRadarAttribution(model);
+}
+
+function buildRadarStatusText(model, radar) {
+  const validity = model.validityTime ? ` · ${formatDate(model.validityTime)}` : "";
+
+  if (model.nativeLayer) {
+    return `Radar Météo-France natif affiché${validity}.`;
+  }
+
+  if (model.rainViewerTileUrl) {
+    return model.sourceMode === "rainviewer"
+      ? `RainViewer affiché${validity}.`
+      : buildRainViewerFallbackText(radar?.meteoFrance, radar?.rainViewer);
+  }
+
+  if (model.sourceMode === "meteofrance") {
+    return "Météo-France sélectionné, mais la couche native n'est pas exploitable pour ce refresh.";
+  }
+
+  if (model.sourceMode === "rainviewer") {
+    return "RainViewer sélectionné, mais aucune tuile radar n'est disponible pour ce refresh.";
+  }
+
+  if (radar?.meteoFrance?.ok) {
+    return `${uiText("@{%Radar Météo-France disponible, mais couche native non exploitable%}")}${radar.meteoFrance.diagnostics?.fallbackReason ? ` · ${radar.meteoFrance.diagnostics.fallbackReason}` : ""}.`;
+  }
+
+  return uiText("@{%Aucun radar disponible pour le moment.%}");
 }
 
 function buildRadarDisplayModel(radar, rain) {
@@ -2929,17 +2949,16 @@ function renderRadarMetadata(model) {
   const modeLabel = state.radarZoomMode === "auto" ? "Auto recommandé" : "Manuel";
   const distanceLabel = Number.isFinite(model.nearestRainDistanceKm) ? `${Math.round(model.nearestRainDistanceKm)} km` : "Distance pluie indisponible";
   const autoMessage = Number.isFinite(model.nearestRainDistanceKm)
-    ? "Zoom automatique activé : recentrage et ajustement du rayon selon la pluie la plus proche."
-    : "Zoom automatique activé : distance pluie indisponible, rayon ajusté prudemment avec les signaux disponibles.";
+    ? "Rayon ajusté selon la pluie la plus proche."
+    : "Distance pluie indisponible, rayon ajusté prudemment.";
 
-  els.radarSourceLabel.textContent = model.sourceLabel;
-  els.radarValidity.textContent = model.validityTime ? formatDate(model.validityTime) : "—";
-  els.radarFreshness.textContent = model.freshnessLabel;
-  els.radarRadiusLabel.textContent = radiusLabel;
-  els.radarFallbackLabel.hidden = !model.fallbackLabel;
-  els.radarFallbackLabel.textContent = model.fallbackLabel;
+  if (els.radarFallbackLabel) {
+    els.radarFallbackLabel.hidden = !model.fallbackLabel;
+    els.radarFallbackLabel.textContent = model.fallbackLabel;
+  }
+
   els.radarZoomStatus.textContent = state.radarZoomMode === "auto" ? "Zoom automatique activé" : "Zoom manuel";
-  els.radarZoomMessage.textContent = state.radarZoomMode === "auto" ? autoMessage : "Zoom automatique désactivé : la carte conserve le cadrage utilisateur.";
+  els.radarZoomMessage.textContent = state.radarZoomMode === "auto" ? autoMessage : `${radiusLabel} · utilisez + / - pour changer le rayon.`;
   els.radarZoomToggleButton.textContent = state.radarZoomMode === "auto" ? "Désactiver" : "Réactiver";
   els.radarModeSelect.value = state.radarZoomMode;
   if (els.radarSourceSelect) {
@@ -2953,6 +2972,16 @@ function renderRadarMetadata(model) {
   els.radarNearestRain.textContent = distanceLabel;
   els.radarControlSource.textContent = model.sourceLabel;
   renderRadarDistanceRings(model.radiusKm);
+}
+
+function renderRadarMapNotice(model) {
+  if (!els.radarMapNotice) {
+    return;
+  }
+
+  const hasRadarOverlay = !!model.nativeLayer || !!model.rainViewerTileUrl;
+  els.radarMapNotice.hidden = hasRadarOverlay;
+  els.radarMapNotice.textContent = hasRadarOverlay ? "" : "Aucune couche pluie affichée dans le rayon actuel.";
 }
 
 function renderRadarDistanceRings(radiusKm) {
@@ -2975,22 +3004,18 @@ function renderRadarDistanceRings(radiusKm) {
 
 function buildRadarRingLabels(radiusKm) {
   if (radiusKm <= 40) {
-    return [10, 20, 30, 40];
+    return [10, 20, 40].filter((step) => step <= radiusKm);
   }
 
   if (radiusKm <= 80) {
-    return [20, 40, 60, 80];
+    return [20, 40, 60, 80].filter((step) => step <= radiusKm);
   }
 
   if (radiusKm <= 120) {
-    return [20, 40, 80, 100, 120];
+    return [20, 40, 80, 100, 120].filter((step) => step <= radiusKm);
   }
 
-  if (radiusKm <= 160) {
-    return [40, 80, 120, 160];
-  }
-
-  return [50, 100, 160, Math.round(radiusKm)];
+  return [20, 40, 80, 120, 160].filter((step) => step <= radiusKm);
 }
 
 function getNearestRainDistanceKm(radar, rain) {
@@ -3024,7 +3049,7 @@ function getRadarTargetRadiusKm(nearestRainDistanceKm, rain) {
       return 160;
     }
 
-    return 220;
+    return 160;
   }
 
   if (rain?.activeNow) {
@@ -3044,7 +3069,7 @@ function getRadarTargetRadiusKm(nearestRainDistanceKm, rain) {
   }
 
   if (isNoSignificantRain(rain)) {
-    return 220;
+    return 160;
   }
 
   return 160;
@@ -3128,17 +3153,19 @@ function renderRadarMap(location, { nativeLayer, rainViewerTileUrl, radiusKm }) 
 function ensureRadarMap(center, location) {
   if (!state.radarMap) {
     state.radarMap = window.L.map(els.radarMap, {
-      zoomControl: true,
+      zoomControl: false,
       scrollWheelZoom: false,
       attributionControl: true
     }).setView(center, 9);
 
     updateRadarBaseLayer();
+    ensureRadarRadiusControl();
 
     state.radarMarker = window.L.marker(center).addTo(state.radarMap);
   } else {
     state.radarMarker.setLatLng(center);
     updateRadarBaseLayer();
+    ensureRadarRadiusControl();
   }
 
   const markerContent = document.createElement("strong");
@@ -3190,6 +3217,71 @@ function renderRadarAttribution(model) {
   els.radarAttribution.hidden = false;
 }
 
+function ensureRadarRadiusControl() {
+  if (state.radarRadiusControl || !state.radarMap || !window.L) {
+    return;
+  }
+
+  const control = window.L.control({ position: "topleft" });
+  control.onAdd = () => {
+    const container = window.L.DomUtil.create("div", "leaflet-bar leaflet-control radar-radius-control");
+    const zoomIn = createRadarRadiusButton("+", "Réduire le rayon radar", () => stepRadarRadius(-1));
+    const zoomOut = createRadarRadiusButton("−", "Augmenter le rayon radar", () => stepRadarRadius(1));
+    container.append(zoomIn, zoomOut);
+    return container;
+  };
+  control.addTo(state.radarMap);
+  state.radarRadiusControl = control;
+}
+
+function createRadarRadiusButton(label, title, onClick) {
+  const button = window.L.DomUtil.create("a", "", null);
+  button.href = "#";
+  button.setAttribute("role", "button");
+  button.title = title;
+  button.setAttribute("aria-label", title);
+  button.textContent = label;
+  window.L.DomEvent.disableClickPropagation(button);
+  window.L.DomEvent.on(button, "click", (event) => {
+    window.L.DomEvent.preventDefault(event);
+    onClick();
+  });
+  return button;
+}
+
+function stepRadarRadius(direction) {
+  const current = Number.isFinite(state.radarRadiusKm) ? state.radarRadiusKm : 80;
+  const nextRadius = getNextRadarRadiusStep(current, direction);
+  setRadarManualRadius(nextRadius);
+}
+
+function getNextRadarRadiusStep(currentRadiusKm, direction) {
+  const closestIndex = RADAR_RADIUS_STEPS_KM.reduce((bestIndex, step, index) => (
+    Math.abs(step - currentRadiusKm) < Math.abs(RADAR_RADIUS_STEPS_KM[bestIndex] - currentRadiusKm) ? index : bestIndex
+  ), 0);
+  const nextIndex = Math.max(0, Math.min(RADAR_RADIUS_STEPS_KM.length - 1, closestIndex + direction));
+  return RADAR_RADIUS_STEPS_KM[nextIndex];
+}
+
+function setRadarManualRadius(radiusKm) {
+  state.radarZoomMode = "manual";
+  state.radarRadiusKm = radiusKm;
+  renderRadar(state.status?.radar, state.status?.location, state.status?.rain || {});
+
+  const center = getRadarMapCenter(state.status?.location);
+  if (center && state.radarMap) {
+    state.radarMap.fitBounds(buildBoundsFromRadius(center, radiusKm), {
+      animate: false,
+      padding: [10, 10]
+    });
+  }
+}
+
+function getRadarMapCenter(location) {
+  const center = [Number(location?.latitude), Number(location?.longitude)];
+  return Number.isFinite(center[0]) && Number.isFinite(center[1]) ? center : null;
+}
+
 function updateRadarViewport(center, radiusKm) {
   if (!state.radarMap || state.radarZoomMode !== "auto" || !Number.isFinite(radiusKm)) {
     return;
@@ -3225,7 +3317,7 @@ function updateNativeRadarLayer(nativeLayer) {
   }
 
   state.radarNativeLayer = window.L.imageOverlay(nativeLayer.imageDataUrl, nativeLayer.bounds, {
-    opacity: 0.68,
+    opacity: 0.78,
     zIndex: 20,
     attribution: uiText("@{%Météo-France%}")
   }).addTo(state.radarMap);
@@ -3242,7 +3334,7 @@ function updateRainLayer(tileUrlTemplate) {
   }
 
   state.radarRainLayer = window.L.tileLayer(tileUrlTemplate, {
-    opacity: 0.68,
+    opacity: 0.82,
     zIndex: 20,
     maxNativeZoom: 7,
     maxZoom: 19,
@@ -3396,10 +3488,17 @@ function toggleMapLayerPanel(panel, trigger) {
 
   const isHidden = panel.hidden;
   panel.hidden = !isHidden;
+  syncMapLayerPanelTriggers(panel, trigger, isHidden);
+}
 
-  if (trigger) {
-    trigger.setAttribute("aria-expanded", String(isHidden));
-  }
+function syncMapLayerPanelTriggers(panel, trigger, isExpanded) {
+  const panelId = panel.id;
+  const triggers = [trigger, ...document.querySelectorAll(`[aria-controls="${panelId}"]`)].filter(Boolean);
+  const uniqueTriggers = [...new Set(triggers)];
+
+  uniqueTriggers.forEach((item) => {
+    item.setAttribute("aria-expanded", String(isExpanded));
+  });
 }
 
 function normalizeMapBaseLayerKey(value) {
