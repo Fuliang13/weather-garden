@@ -64,6 +64,17 @@ describe("Meteo-France native HDF5 raster layer", () => {
     expect(radar.diagnostics.nativeLayerAvailable).toBe(true);
     expect(radar.diagnostics.hdf5).toMatchObject({
       canDecodeGrid: true,
+      selectedDataset: {
+        path: "/data1",
+        name: "data1",
+        quantity: "ACRR",
+        dimensions: [3472, 3472],
+        gain: 0.01,
+        nodata: 65535
+      },
+      dimensions: [3472, 3472],
+      validityTime: "2026-05-06T16:35:00.000Z",
+      bounds: [[48.1, -1.5], [48.9, -0.7]],
       nativeLayerCriteria: {
         valuesReadable: true,
         valuesDecoded: true,
@@ -76,12 +87,25 @@ describe("Meteo-France native HDF5 raster layer", () => {
         sourceHeight: 3472,
         downsampleFactor: 4,
         storage: "chunked",
-        decodedChunks: 1
+        decodedChunks: 1,
+        selectedDataset: "/data1",
+        quantity: "ACRR",
+        gain: 0.01,
+        nodata: 65535,
+        nonZeroPixels: 3600,
+        rainPixels: 3600,
+        image: {
+          type: "image/png",
+          dataUrlAvailable: true,
+          leafletImageOverlay: true
+        }
       },
       nativeLayerBlocker: null,
       error: null
     });
     expect(radar.diagnostics.hdf5.nativeRaster.valueCount).toBeGreaterThan(0);
+    expect(radar.diagnostics.hdf5.nativeRaster.minValue).toBe(2.5);
+    expect(radar.diagnostics.hdf5.nativeRaster.maxValue).toBe(2.5);
     expect(JSON.stringify(radar.diagnostics.hdf5)).not.toContain("data:image");
     expect(JSON.stringify(radar)).not.toContain("api-key-token");
     expect(JSON.stringify(radar)).not.toContain("secret-product-token");
@@ -131,6 +155,7 @@ async function buildDecodableHdf5Fixture() {
     chunkBtreeAddress,
     attributes: [
       stringAttribute("units", "centiemes de mm"),
+      stringAttribute("quantity", "ACRR"),
       float64Attribute("scale_factor", 0.01),
       uint32Attribute("missing_value", 65535),
       stringAttribute("projection", "EPSG:2154"),

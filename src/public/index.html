@@ -61,23 +61,24 @@
         </aside>
 
         <section class="dashboard-radar-stage" aria-label="Radar pluie observé">
-          <section class="card radar-card dashboard-block dashboard-block-radar">
+          <section id="radarCard" class="card radar-card dashboard-block dashboard-block-radar">
             <div class="section-header radar-card-header">
               <div>
-                <h2>Radar pluie <span class="radar-heading-note">observé</span></h2>
+                <p class="radar-eyebrow">Observatoire météo local</p>
+                <h2>Weather Garden Radar</h2>
                 <p id="radarStatus" class="muted">Chargement radar…</p>
               </div>
               <div class="radar-card-actions" aria-label="Actions radar">
-                <label class="radar-mode-control">
-                  <span>Mode</span>
-                  <select id="radarModeSelect">
-                    <option value="auto">Zoom auto</option>
-                    <option value="manual">Manuel</option>
-                  </select>
-                </label>
+                <button id="radarZoomToggleButton" type="button" class="secondary radar-auto-button">Zoom auto</button>
                 <button id="radarRefreshButton" type="button" class="secondary">Actualiser</button>
                 <button id="radarLayersButton" type="button" class="secondary radar-layers-button" aria-expanded="false" aria-controls="radarLayerPanel">Couches</button>
               </div>
+            </div>
+            <div class="radar-meta-strip" aria-label="État Weather Garden Radar">
+              <span><strong>Source</strong><span id="radarSourceLabel">—</span></span>
+              <span><strong>Image radar</strong><span id="radarValidity">—</span></span>
+              <span><strong>Fraîcheur</strong><span id="radarFreshness">—</span></span>
+              <span><strong>Rayon</strong><span id="radarRadiusLabel">—</span></span>
             </div>
             <p id="radarFallbackLabel" class="radar-fallback-label" hidden>Fallback</p>
             <div class="radar-map-shell">
@@ -89,6 +90,17 @@
                 </div>
                 <div id="radarMapNotice" class="radar-map-notice" hidden></div>
                 <div id="radarDistanceRings" class="radar-distance-rings" aria-hidden="true"></div>
+                <div id="radarPlayback" class="radar-playback" aria-label="Animation radar native" hidden>
+                  <button id="radarPlayButton" type="button" aria-label="Mettre l'animation radar en pause">Pause</button>
+                  <label class="radar-frame-control">
+                    <span id="radarFrameTime">Direct</span>
+                    <input id="radarFrameSlider" type="range" min="0" max="0" value="0" aria-label="Image radar affichée">
+                  </label>
+                  <label class="radar-opacity-control">
+                    <span>Opacité</span>
+                    <input id="radarOpacitySlider" type="range" min="35" max="85" value="62" aria-label="Opacité du radar natif">
+                  </label>
+                </div>
               </div>
             </div>
             <div id="radarLegend" class="radar-legend" hidden>
@@ -107,7 +119,7 @@
                   Source radar
                   <select id="radarSourceSelect">
                     <option value="auto">Auto</option>
-                    <option value="meteofrance">Météo-France</option>
+                    <option value="meteofrance">Météo-France natif</option>
                     <option value="rainviewer">RainViewer</option>
                   </select>
                 </label>
@@ -129,7 +141,6 @@
               <strong id="radarZoomStatus">Zoom automatique activé</strong>
               <span id="radarZoomMessage">Recentrage et ajustement du rayon selon la pluie la plus proche.</span>
             </p>
-            <button id="radarZoomToggleButton" type="button" class="secondary">Désactiver</button>
           </section>
         </section>
 

@@ -1581,15 +1581,15 @@ body[data-active-panel="garden"] .app-shell {
 }
 
 .radar-moderate {
-	background: #63c44f;
+	background: #2d76d2;
 }
 
 .radar-heavy {
-	background: #f39a2d;
+	background: #7659c7;
 }
 
 .radar-extreme {
-	background: #c1121f;
+	background: #b8416a;
 }
 
 .radar-legend-note {
@@ -3288,6 +3288,69 @@ body[data-active-panel="dashboard"] .panel-nav {
 	opacity: 0.4;
 }
 
+.radar-playback {
+	position: absolute;
+	left: 50%;
+	bottom: 6.5%;
+	z-index: 790;
+	display: grid;
+	grid-template-columns: auto minmax(10rem, 1fr) minmax(7rem, 0.7fr);
+	align-items: center;
+	gap: 0.55rem;
+	width: min(33rem, 74%);
+	border: 1px solid rgba(30, 36, 32, 0.14);
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.88);
+	box-shadow: 0 10px 26px rgba(27, 38, 32, 0.13);
+	backdrop-filter: blur(10px);
+	padding: 0.38rem 0.5rem;
+	transform: translateX(-50%);
+}
+
+.radar-playback[hidden] {
+	display: none;
+}
+
+.radar-playback button {
+	min-height: 2rem;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--accent) 12%, white);
+	color: var(--text);
+	font-size: 0.76rem;
+	font-weight: 800;
+	padding: 0.28rem 0.62rem;
+}
+
+.radar-playback button:disabled {
+	cursor: default;
+	opacity: 0.64;
+}
+
+.radar-frame-control,
+.radar-opacity-control {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	align-items: center;
+	gap: 0.42rem;
+	min-width: 0;
+	color: var(--muted);
+	font-size: 0.72rem;
+	font-weight: 760;
+	white-space: nowrap;
+}
+
+.radar-frame-control input,
+.radar-opacity-control input {
+	width: 100%;
+	accent-color: var(--accent);
+}
+
+.native-radar-overlay {
+	image-rendering: auto;
+	mix-blend-mode: multiply;
+	transition: opacity 180ms ease;
+}
+
 .radar-distance-ring {
 	border-color: rgba(30, 36, 32, 0.2);
 	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
@@ -3619,6 +3682,23 @@ body[data-active-panel="dashboard"] .panel-nav {
 		min-height: 2.45rem;
 	}
 
+	.radar-playback {
+		bottom: 5%;
+		grid-template-columns: auto minmax(0, 1fr);
+		width: min(23rem, 84%);
+		border-radius: 0.9rem;
+		padding: 0.42rem;
+	}
+
+	.radar-opacity-control {
+		grid-column: 1 / -1;
+	}
+
+	.radar-frame-control,
+	.radar-opacity-control {
+		font-size: 0.68rem;
+	}
+
 	.radar-legend {
 		grid-template-columns: 1fr;
 		border-radius: 1rem;
@@ -3634,5 +3714,225 @@ body[data-active-panel="dashboard"] .panel-nav {
 		position: static;
 		width: 100%;
 		margin-top: 0.45rem;
+	}
+}
+
+.radar-eyebrow {
+	margin: 0 0 0.08rem;
+	color: var(--accent);
+	font-size: 0.72rem;
+	font-weight: 820;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+.radar-card {
+	background:
+		radial-gradient(circle at 50% 42%, rgba(39, 125, 161, 0.08), rgba(255, 255, 255, 0) 42%),
+		linear-gradient(180deg, #ffffff, color-mix(in srgb, var(--soft) 28%, white));
+}
+
+.radar-card-header h2 {
+	font-size: clamp(1.28rem, 1.35vw, 1.72rem);
+}
+
+.radar-card-header #radarStatus {
+	color: color-mix(in srgb, var(--text) 74%, var(--muted));
+	font-weight: 560;
+}
+
+.radar-card-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+
+.radar-auto-button[data-active="true"] {
+	border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+	background: color-mix(in srgb, var(--accent) 12%, white);
+	color: var(--accent);
+}
+
+.radar-meta-strip {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 0.48rem;
+	margin: 0.2rem 0 0.15rem;
+}
+
+.radar-meta-strip > span {
+	display: grid;
+	gap: 0.12rem;
+	min-width: 0;
+	border: 1px solid color-mix(in srgb, var(--border) 76%, white);
+	border-radius: 0.9rem;
+	background: rgba(255, 255, 255, 0.72);
+	padding: 0.5rem 0.62rem;
+}
+
+.radar-meta-strip strong {
+	color: var(--muted);
+	font-size: 0.68rem;
+	font-weight: 760;
+	letter-spacing: 0.03em;
+	line-height: 1;
+	text-transform: uppercase;
+}
+
+.radar-meta-strip span span {
+	overflow: hidden;
+	color: var(--text);
+	font-size: 0.84rem;
+	font-weight: 780;
+	line-height: 1.12;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.radar-card[data-state="fresh"] .radar-meta-strip > span:nth-child(3) span,
+.radar-card[data-state="fallback"] .radar-meta-strip > span:nth-child(3) span {
+	color: var(--accent);
+}
+
+.radar-card[data-state="stale"] .radar-meta-strip > span:nth-child(3) span,
+.radar-card[data-state="partial"] .radar-meta-strip > span:nth-child(3) span {
+	color: #8a5a10;
+}
+
+.radar-card[data-state="unavailable"] .radar-meta-strip > span:nth-child(3) span {
+	color: var(--danger);
+}
+
+.radar-card[data-state="loading"] .radar-meta-strip > span:nth-child(3) span {
+	color: var(--wet);
+}
+
+.radar-fallback-label {
+	border-color: color-mix(in srgb, var(--wet) 28%, var(--border));
+	background: #e7f2f7;
+	color: #1f5f78;
+}
+
+.radar-map-shell {
+	padding-top: clamp(0.25rem, 0.55vw, 0.5rem);
+}
+
+.radar-map-frame {
+	width: min(100%, clamp(39rem, 58vw, 57rem));
+	box-shadow:
+		inset 0 0 0 1px rgba(255, 255, 255, 0.74),
+		inset 0 0 52px rgba(39, 125, 161, 0.08),
+		0 20px 46px rgba(27, 38, 32, 0.1);
+}
+
+.radar-map-frame::before {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	z-index: 455;
+	width: 0.62rem;
+	height: 0.62rem;
+	border: 2px solid white;
+	border-radius: 50%;
+	background: var(--accent);
+	box-shadow: 0 0 0 0.45rem rgba(45, 106, 79, 0.18), 0 0 0 0.86rem rgba(45, 106, 79, 0.08);
+	pointer-events: none;
+	transform: translate(-50%, -50%);
+}
+
+.radar-map-notice {
+	color: var(--text);
+}
+
+.radar-zoom-status {
+	border-color: color-mix(in srgb, var(--accent) 14%, var(--border));
+	background: color-mix(in srgb, var(--soft) 60%, white);
+}
+
+.radar-zoom-status button {
+	display: none;
+}
+
+.dashboard-block-radar-control {
+	display: none;
+}
+
+@media (max-width: 1280px) {
+	.radar-meta-strip {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+@media (max-width: 860px) {
+	.dashboard-weather-layout {
+		grid-template-areas:
+			"radar"
+			"summary"
+			"next"
+			"station"
+			"horizons"
+			"alerts"
+			"sources";
+	}
+
+	.radar-card-header,
+	.radar-card-actions {
+		align-items: stretch;
+		grid-template-columns: 1fr;
+	}
+
+	.radar-card-actions {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+
+	.radar-card-actions button {
+		width: 100%;
+		padding-inline: 0.58rem;
+	}
+}
+
+@media (max-width: 760px) {
+	body[data-active-panel="dashboard"] .app-shell {
+		padding-top: 0.68rem;
+	}
+
+	body[data-active-panel="dashboard"] .hero,
+	body[data-active-panel="dashboard"] .panel-nav {
+		margin-bottom: 0.52rem;
+	}
+
+	.radar-card {
+		padding: 0.68rem;
+	}
+
+	.radar-meta-strip {
+		grid-template-columns: 1fr 1fr;
+		gap: 0.38rem;
+	}
+
+	.radar-meta-strip > span {
+		padding: 0.44rem 0.5rem;
+	}
+
+	.radar-meta-strip strong {
+		font-size: 0.62rem;
+	}
+
+	.radar-meta-strip span span {
+		font-size: 0.76rem;
+	}
+
+	.radar-map-frame {
+		width: min(100%, calc(100vw - 2rem));
+	}
+
+	.radar-card-actions {
+		grid-template-columns: 1fr;
+	}
+
+	.radar-card-actions button {
+		min-height: 2.34rem;
 	}
 }
