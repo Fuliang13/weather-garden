@@ -1,7 +1,30 @@
 const DEFAULT_FRESHNESS_LIMIT_MINUTES = 15;
+const WGR_SOURCE_ID = "wgr";
+const SOURCE_ALIASES = {
+  mf: "meteofrance-radar",
+  "meteo-france": "meteofrance-radar",
+  meteofrance: "meteofrance-radar",
+  "meteofrance-radar": "meteofrance-radar",
+  rv: "rainviewer",
+  rainviewer: "rainviewer",
+  wgr: WGR_SOURCE_ID,
+  "open-meteo": "open-meteo-arome",
+  "open-meteo-arome": "open-meteo-arome",
+  arome: "open-meteo-arome",
+  "met-norway": "met-norway",
+  metnorway: "met-norway",
+  ecowitt: "ecowitt",
+  garden: "garden-state",
+  "garden-state": "garden-state"
+};
+const WGR_TIMELINE_KINDS = new Set(["observed", "current", "future"]);
+const WGR_PHASES = new Set(["observed", "predicted", "extrapolated", "aggregated", "uncertain", "unavailable"]);
+const WGR_STATES = new Set(["fresh", "stale", "degraded", "unavailable"]);
+const SENSITIVE_KEY_PATTERN = /(api|token|secret|key|authorization|header|cookie|signed|url|payload|raw|mac|imei)/i;
+const URL_PATTERN = /https?:\/\//i;
 
 export function normalizeRadarFrame(frame = {}, options = {}) {
-  const source = normalizeString(frame.source || options.source || "unknown");
+  const source = normalizeSourceId(frame.source || options.source || "unknown");
   const timestamp = normalizeIsoDate(frame.timestamp || frame.frameTime || frame.validityTime);
   const fetchedAt = normalizeIsoDate(frame.fetchedAt || options.fetchedAt);
   const ageMinutes = computeAgeMinutes(timestamp, options.now || frame.now);
@@ -21,19 +44,19 @@ export function normalizeRadarFrame(frame = {}, options = {}) {
       resolutionMeters: finiteOrNull(frame.resolutionMeters)
     },
     quality: normalizeQuality(frame.quality),
-    origin: normalizeString(frame.origin || source),
+    origin: normalizeSourceId(frame.origin || source),
     fallbackReason: normalizeString(frame.fallbackReason),
     derivedFrom: normalizeDerivedFrom(frame.derivedFrom)
   });
 }
 
 export function normalizeRadarSequence(input = {}, options = {}) {
-  const source = normalizeString(input.source || options.source || "unknown");
+  const source = normalizeSourceId(input.source || options.source || "unknown");
   const frames = Array.isArray(input.frames)
     ? input.frames.map((frame) => normalizeRadarFrame(frame, { ...options, source })).filter((frame) => frame.timestamp || frame.fetchedAt)
     : [];
 
-  frames.sort((a, b) => String(a.timestamp || a.fetchedAt).localeCompare(String(b.timestamp || b.fetchedAt)));
+  frames.sort(compareTimestampLike);
 
   return {
     type: "RadarSequence",
@@ -52,45 +75,156 @@ export function normalizeRadarSequence(input = {}, options = {}) {
 }
 
 export function normalizeRadarSourceStatus(input = {}, options = {}) {
-  const source = normalizeString(input.source || options.source || "unknown");
+  const source = normalizeSourceId(input.source || options.source || "unknown");
   const fetchedAt = normalizeIsoDate(input.fetchedAt || options.fetchedAt);
-  const latestFrameAt = normalizeIsoDate(input.latestFrameAt || input.validityTime || input.frameTime);
+  const latestFrameAt = normalizeIsoDate(input.latestFrameAt || input.validityTime || input.frameTime || input.timestamp);
   const ageMinutes = computeAgeMinutes(latestFrameAt || fetchedAt, options.now || input.now);
   const freshnessLimitMinutes = finiteOrNull(input.freshnessLimitMinutes) || DEFAULT_FRESHNESS_LIMIT_MINUTES;
   const available = input.ok === true || input.available === true;
-  const freshness = available
-    ? classifyFreshness(ageMinutes, freshnessLimitMinutes)
-    : "unavailable";
+  const classifiedFreshness = available ? classifyFreshness(ageMinutes, freshnessLimitMinutes) : "unavailable";
+  const freshness = normalizeWgrState(input.state || input.freshness) || (classifiedFreshness === "unknown" && available ? "degraded" : classifiedFreshness);
 
   return {
     type: "RadarSourceStatus",
     source,
     available,
     freshness,
+    state: freshness,
     fetchedAt,
     latestFrameAt,
     ageMinutes,
+    freshnessMinutes: ageMinutes,
     quality: normalizeQuality(input.quality),
     fallbackReason: normalizeString(input.fallbackReason || input.reason),
     error: normalizeString(input.error),
-    derivedFrom: normalizeDerivedFrom(input.derivedFrom)
+    derivedFrom: normalizeDerivedFrom(input.derivedFrom),
+    publicSafe: true
   };
 }
 
+export function normalizeWgrSourceContribution(input = {}, options = {}) {
+  const id = normalizeSourceId(input.id || input.source || options.id || "unknown");
+  const timestamp = normalizeIsoDate(input.timestamp || input.latestFrameAt || input.updatedAt || input.validityTime || input.frameTime);
+  const fetchedAt = normalizeIsoDate(input.fetchedAt || options.fetchedAt);
+  const freshnessMinutes = computeAgeMinutes(timestamp || fetchedAt, options.now || input.now);
+  const available = input.available === true || input.ok === true;
+  const ignored = input.ignored === true || input.used === false;
+  const used = available && !ignored && input.used !== false;
+  const classifiedFreshness = available ? classifyFreshness(freshnessMinutes, finiteOrNull(input.freshnessLimitMinutes) || DEFAULT_FRESHNESS_LIMIT_MINUTES) : "unavailable";
+  const state = normalizeWgrState(input.state || input.freshness) || (classifiedFreshness === "unknown" && available ? "degraded" : classifiedFreshness);
+
+  return {
+    type: "WgrSourceContribution",
+    id,
+    source: id,
+    role: normalizeString(input.role || options.role || inferSourceRole(id)),
+    available,
+    used,
+    ignored: !used,
+    ignoreReason: used ? null : normalizeString(input.ignoreReason || input.reason || input.fallbackReason || (available ? "not selected for this WGR synthesis" : "source unavailable")),
+    timestamp,
+    fetchedAt,
+    freshness: state,
+    state,
+    freshnessMinutes,
+    confidence: normalizeConfidence(input.confidence ?? input.quality?.score),
+    quality: normalizeQuality(input.quality || { ok: available, reason: input.reason || input.error || input.fallbackReason }),
+    derivedFrom: normalizeDerivedFrom(input.derivedFrom),
+    diagnostics: sanitizePublicDiagnostics(input.diagnostics),
+    publicSafe: true
+  };
+}
+
+export function normalizeWgrTimelineFrame(input = {}, options = {}) {
+  const kind = normalizeTimelineKind(input.kind || options.kind);
+  const phase = normalizeWgrPhase(input.phase || input.status || input.availability || options.phase);
+  const available = input.available === true || !["unavailable", "uncertain"].includes(phase);
+  const timestamp = normalizeIsoDate(input.timestamp || input.validityTime || input.frameTime);
+
+  return {
+    type: "WgrTimelineFrame",
+    source: WGR_SOURCE_ID,
+    kind,
+    phase,
+    available,
+    timestamp,
+    label: normalizeString(input.label),
+    reason: normalizeString(input.reason || input.explanation),
+    contributors: normalizeSourceList(input.contributors || input.sources || input.sourcesUsed),
+    derivedFrom: normalizeDerivedFrom(input.derivedFrom),
+    confidence: normalizeConfidence(input.confidence),
+    publicSafe: true
+  };
+}
+
+export function buildWgrTimeline(input = {}, options = {}) {
+  const observedFrames = normalizeTimelineFrames(input.observedFrames, { ...options, kind: "observed", phase: "observed" });
+  const futureFrames = normalizeTimelineFrames(input.futureFrames, { ...options, kind: "future", phase: "unavailable" });
+  const currentFrame = input.currentFrame
+    ? normalizeWgrTimelineFrame(input.currentFrame, { ...options, kind: "current", phase: "aggregated" })
+    : buildCurrentTimelineFrame(observedFrames, futureFrames);
+
+  return {
+    type: "WgrTimeline",
+    generatedAt: normalizeIsoDate(input.generatedAt || options.generatedAt) || new Date(0).toISOString(),
+    observedFrames,
+    currentFrame,
+    futureFrames,
+    frames: [...observedFrames, ...(currentFrame ? [currentFrame] : []), ...futureFrames]
+      .filter(Boolean)
+      .sort(compareTimestampLike),
+    explanation: normalizeString(input.explanation)
+  };
+}
+
+export function buildUnavailableFutureFrame({ now = new Date(), minutes = 30, reason } = {}) {
+  const nowDate = now instanceof Date ? now : new Date(now);
+  const timestamp = Number.isNaN(nowDate.getTime()) ? null : new Date(nowDate.getTime() + minutes * 60_000).toISOString();
+
+  return normalizeWgrTimelineFrame({
+    kind: "future",
+    phase: "unavailable",
+    available: false,
+    timestamp,
+    label: `+${minutes} min`,
+    reason: reason || `Projection +${minutes} min indisponible : aucune source suffisante dans ce modèle de test.`
+  });
+}
+
 export function normalizeRadarSynthesis(input = {}) {
+  const contributions = Array.isArray(input.contributions)
+    ? input.contributions.map((item) => normalizeWgrSourceContribution(item, { now: input.generatedAt }))
+    : [];
+  const sourcesUsed = normalizeSourceList(input.sourcesUsed || contributions.filter((item) => item.used).map((item) => item.id));
+  const sourcesIgnored = normalizeSourceList(input.sourcesIgnored || contributions.filter((item) => item.ignored).map((item) => item.id));
+  const globalState = normalizeWgrState(input.globalState) || deriveGlobalState(input.state, input.sourceStatus, contributions);
+
   return {
     type: "RadarSynthesis",
+    mode: "WGR",
+    source: WGR_SOURCE_ID,
     generatedAt: normalizeIsoDate(input.generatedAt) || new Date(0).toISOString(),
     state: normalizeString(input.state || "unavailable"),
+    globalState,
     observedRain: input.observedRain === true,
     imminentRain: input.imminentRain === true,
     etaMinutes: finiteOrNull(input.etaMinutes),
     intensity: normalizeIntensity(input.intensity),
     confidence: normalizeConfidence(input.confidence),
+    confidenceReasons: normalizeStringList(input.confidenceReasons),
+    degradationReasons: normalizeStringList(input.degradationReasons),
     coherence: normalizeString(input.coherence || "unknown"),
     sourceStatus: Array.isArray(input.sourceStatus) ? input.sourceStatus.map((status) => normalizeRadarSourceStatus(status)) : [],
+    contributions,
+    sourcesUsed,
+    sourcesIgnored,
+    finalLayer: normalizeWgrFinalLayer(input.finalLayer, sourcesUsed),
+    timeline: buildWgrTimeline(input.timeline || {}, { generatedAt: input.generatedAt }),
+    futureProjection: normalizeFutureProjection(input.futureProjection),
+    diagnostics: sanitizePublicDiagnostics(input.diagnostics || buildPublicDiagnostics({ globalState, sourcesUsed, sourcesIgnored })),
     derivedFrom: normalizeDerivedFrom(input.derivedFrom),
-    explanations: normalizeStringList(input.explanations)
+    explanations: normalizeStringList(input.explanations),
+    publicSafe: true
   };
 }
 
@@ -116,6 +250,145 @@ export function confidenceLabel(value) {
   }
 
   return "low";
+}
+
+function buildCurrentTimelineFrame(observedFrames, futureFrames) {
+  const latestObserved = observedFrames[observedFrames.length - 1] || null;
+
+  if (latestObserved) {
+    return normalizeWgrTimelineFrame({
+      ...latestObserved,
+      kind: "current",
+      phase: "aggregated",
+      contributors: latestObserved.contributors,
+      derivedFrom: latestObserved.derivedFrom
+    });
+  }
+
+  if (futureFrames.length > 0) {
+    return normalizeWgrTimelineFrame({
+      kind: "current",
+      phase: "unavailable",
+      available: false,
+      reason: "Aucune frame observée disponible pour construire la frame WGR actuelle."
+    });
+  }
+
+  return null;
+}
+
+function normalizeTimelineFrames(frames, options) {
+  if (!Array.isArray(frames)) {
+    return [];
+  }
+
+  return frames
+    .map((frame) => normalizeWgrTimelineFrame(frame, options))
+    .filter((frame) => frame.timestamp || frame.phase === "unavailable")
+    .sort(compareTimestampLike);
+}
+
+function normalizeWgrFinalLayer(input = {}, sourcesUsed = []) {
+  return {
+    id: WGR_SOURCE_ID,
+    source: WGR_SOURCE_ID,
+    kind: normalizeWgrPhase(input.kind || input.phase || "aggregated"),
+    available: input.available !== false && sourcesUsed.length > 0,
+    contributors: normalizeSourceList(input.contributors || sourcesUsed),
+    publicSafe: true
+  };
+}
+
+function normalizeFutureProjection(input = {}) {
+  const state = normalizeString(input.state || input.availability || "unavailable");
+
+  return {
+    horizonMinutes: finiteOrNull(input.horizonMinutes) || 30,
+    state: ["available", "text-only", "unavailable"].includes(state) ? state : "unavailable",
+    frameAvailable: input.frameAvailable === true,
+    textOnly: input.textOnly === true || state === "text-only",
+    reason: normalizeString(input.reason || (state === "unavailable" ? "Projection +30 min indisponible : aucune source suffisante dans ce modèle de test." : null)),
+    derivedFrom: normalizeDerivedFrom(input.derivedFrom),
+    publicSafe: true
+  };
+}
+
+function deriveGlobalState(state, sourceStatus, contributions) {
+  const normalizedState = normalizeWgrState(state);
+  if (normalizedState) {
+    return normalizedState;
+  }
+
+  const statuses = Array.isArray(sourceStatus) ? sourceStatus : [];
+  if (statuses.some((status) => status?.freshness === "stale" || status?.state === "stale")) {
+    return "stale";
+  }
+
+  if (contributions.some((item) => item.used && item.state === "fresh")) {
+    return contributions.some((item) => item.ignored && item.available) ? "degraded" : "fresh";
+  }
+
+  if (contributions.some((item) => item.used)) {
+    return "degraded";
+  }
+
+  return "unavailable";
+}
+
+function buildPublicDiagnostics({ globalState, sourcesUsed, sourcesIgnored }) {
+  return {
+    globalState,
+    sourcesUsed,
+    sourcesIgnored,
+    publicSafe: true
+  };
+}
+
+function sanitizePublicDiagnostics(value, depth = 0) {
+  if (!value || typeof value !== "object" || depth > 4) {
+    return {};
+  }
+
+  return Object.fromEntries(Object.entries(value).flatMap(([key, entry]) => {
+    if (SENSITIVE_KEY_PATTERN.test(key)) {
+      return [];
+    }
+
+    if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+      return [[key, sanitizePublicDiagnostics(entry, depth + 1)]];
+    }
+
+    if (Array.isArray(entry)) {
+      return [[key, entry.map((item) => sanitizeDiagnosticValue(item, depth + 1)).filter((item) => item !== null)]];
+    }
+
+    const safeValue = sanitizeDiagnosticValue(entry, depth + 1);
+    return safeValue === null ? [] : [[key, safeValue]];
+  }));
+}
+
+function sanitizeDiagnosticValue(value, depth) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    return URL_PATTERN.test(value) ? null : value;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeDiagnosticValue(item, depth + 1)).filter((item) => item !== null);
+  }
+
+  if (typeof value === "object") {
+    return sanitizePublicDiagnostics(value, depth + 1);
+  }
+
+  return null;
 }
 
 function normalizeIntensity(value) {
@@ -180,12 +453,63 @@ function normalizeDerivedFrom(value) {
     .filter(Boolean);
 }
 
+function normalizeSourceList(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return [...new Set(value.map((item) => normalizeSourceId(item)).filter(Boolean))];
+}
+
 function normalizeStringList(value) {
   if (!Array.isArray(value)) {
     return [];
   }
 
   return value.map((item) => normalizeString(item)).filter(Boolean);
+}
+
+function normalizeTimelineKind(value) {
+  const normalized = normalizeString(value);
+  return WGR_TIMELINE_KINDS.has(normalized) ? normalized : "observed";
+}
+
+function normalizeWgrPhase(value) {
+  const normalized = normalizeString(value);
+  return WGR_PHASES.has(normalized) ? normalized : "unavailable";
+}
+
+function normalizeWgrState(value) {
+  const normalized = normalizeString(value);
+  return WGR_STATES.has(normalized) ? normalized : null;
+}
+
+function inferSourceRole(id) {
+  if (id === "meteofrance-radar" || id === "rainviewer") {
+    return "radar-observation";
+  }
+
+  if (id === "open-meteo-arome") {
+    return "forecast-primary";
+  }
+
+  if (id === "met-norway") {
+    return "forecast-confirmation";
+  }
+
+  if (id === "ecowitt") {
+    return "local-observation";
+  }
+
+  if (id === "garden-state") {
+    return "garden-context";
+  }
+
+  if (id === WGR_SOURCE_ID) {
+    return "weather-garden-synthesis";
+  }
+
+  return "unknown";
 }
 
 function computeAgeMinutes(timestamp, now = new Date()) {
@@ -217,8 +541,17 @@ function finiteOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function normalizeSourceId(value) {
+  const normalized = normalizeString(value);
+  return normalized ? SOURCE_ALIASES[normalized.toLowerCase()] || normalized.toLowerCase() : null;
+}
+
 function normalizeString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function compareTimestampLike(a, b) {
+  return String(a.timestamp || a.fetchedAt || "").localeCompare(String(b.timestamp || b.fetchedAt || ""));
 }
 
 function pruneNullish(value) {

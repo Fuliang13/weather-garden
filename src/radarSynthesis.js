@@ -1,6 +1,12 @@
-import { normalizeRadarSynthesis } from "./radarModel.js";
+import {
+  buildUnavailableFutureFrame,
+  buildWgrTimeline,
+  normalizeRadarSynthesis,
+  normalizeWgrSourceContribution
+} from "./radarModel.js";
 
 const LOCAL_RAIN_RATE_THRESHOLD = 0.1;
+const WGR_UNAVAILABLE_PROJECTION_REASON = "Projection +30 min indisponible : aucune source suffisante dans ce modèle de test.";
 
 export function buildWgrSynthesis({
   meteoFranceRadar = null,
@@ -8,6 +14,7 @@ export function buildWgrSynthesis({
   openMeteo = null,
   metNorway = null,
   ecowittObservation = null,
+  garden = null,
   rain = null,
   now = new Date()
 } = {}) {
@@ -22,8 +29,23 @@ export function buildWgrSynthesis({
   const coherence = classifyCoherence({ observedRain, modelRain, stationConfirmsRain, nativeOk, rainViewerOk });
   const confidenceScore = computeConfidenceScore({ nativeOk, rainViewerOk, stationConfirmsRain, modelRain, coherence });
   const state = pickWgrState({ nativeOk, rainViewerOk, sourceStatus });
+  const contributions = collectWgrContributions({
+    meteoFranceRadar,
+    rainViewer,
+    openMeteo,
+    metNorway,
+    ecowittObservation,
+    garden,
+    nativeOk,
+    rainViewerOk,
+    stationConfirmsRain,
+    modelRain,
+    now
+  });
+  const globalState = pickWgrGlobalState({ nativeOk, rainViewerOk, sourceStatus, contributions, stationConfirmsRain, modelRain, rain });
   const explanations = buildExplanations({
     state,
+    globalState,
     nativeOk,
     rainViewerOk,
     observedRain,
@@ -33,11 +55,13 @@ export function buildWgrSynthesis({
     coherence,
     rain
   });
+  const degradationReasons = collectDegradationReasons({ state, globalState, sourceStatus, contributions, modelRain, stationConfirmsRain });
 
   return {
     ...normalizeRadarSynthesis({
       generatedAt: now,
       state,
+      globalState,
       observedRain,
       imminentRain,
       etaMinutes: rain?.etaMinutes ?? null,
@@ -46,8 +70,31 @@ export function buildWgrSynthesis({
         mmPerHour: rain?.intensityMmPerHour ?? null
       },
       confidence: confidenceScore,
+      confidenceReasons: collectConfidenceReasons({ nativeOk, rainViewerOk, stationConfirmsRain, modelRain, coherence }),
+      degradationReasons,
       coherence,
       sourceStatus,
+      contributions,
+      sourcesUsed: contributions.filter((item) => item.used).map((item) => item.id),
+      sourcesIgnored: contributions.filter((item) => item.ignored).map((item) => item.id),
+      finalLayer: {
+        id: "wgr",
+        source: "wgr",
+        kind: "aggregated",
+        contributors: contributions.filter((item) => item.used).map((item) => item.id)
+      },
+      timeline: buildTimelineModel({ meteoFranceRadar, rainViewer, now }),
+      futureProjection: {
+        horizonMinutes: 30,
+        state: "unavailable",
+        frameAvailable: false,
+        reason: WGR_UNAVAILABLE_PROJECTION_REASON
+      },
+      diagnostics: {
+        globalState,
+        radarStatusCount: sourceStatus.length,
+        contributionCount: contributions.length
+      },
       derivedFrom: collectDerivedFrom({ nativeOk, rainViewerOk, stationConfirmsRain, modelRain, rain }),
       explanations
     }),
@@ -61,6 +108,121 @@ function collectRadarSourceStatus(meteoFranceRadar, rainViewer) {
     meteoFranceRadar?.wgr?.status,
     rainViewer?.wgr?.status
   ].filter(Boolean);
+}
+
+function collectWgrContributions({ meteoFranceRadar, rainViewer, openMeteo, metNorway, ecowittObservation, garden, nativeOk, rainViewerOk, stationConfirmsRain, modelRain, now }) {
+  return [
+    normalizeWgrSourceContribution({
+      id: "meteofrance-radar",
+      role: "radar-observation",
+      available: nativeOk,
+      used: nativeOk,
+      timestamp: meteoFranceRadar?.wgr?.latestFrame?.timestamp || meteoFranceRadar?.validityTime,
+      fetchedAt: meteoFranceRadar?.fetchedAt,
+      freshness: meteoFranceRadar?.wgr?.status?.freshness,
+      reason: meteoFranceRadar?.wgr?.status?.fallbackReason,
+      quality: meteoFranceRadar?.wgr?.status?.quality,
+      derivedFrom: nativeOk ? ["meteofrance.wgr"] : []
+    }, { now }),
+    normalizeWgrSourceContribution({
+      id: "rainviewer",
+      role: "radar-observation",
+      available: rainViewerOk,
+      used: rainViewerOk,
+      timestamp: rainViewer?.wgr?.latestFrame?.timestamp || rainViewer?.frameTime,
+      fetchedAt: rainViewer?.fetchedAt,
+      freshness: rainViewer?.wgr?.status?.freshness,
+      reason: rainViewer?.wgr?.status?.fallbackReason,
+      quality: rainViewer?.wgr?.status?.quality,
+      derivedFrom: rainViewerOk ? ["rainviewer.wgr"] : []
+    }, { now }),
+    normalizeWgrSourceContribution({
+      id: "open-meteo-arome",
+      role: "forecast-primary",
+      available: !!openMeteo,
+      used: hasModelRain(openMeteo),
+      timestamp: firstTimestamp(openMeteo?.current?.time, openMeteo?.current?.timestamp, openMeteo?.updatedAt),
+      fetchedAt: openMeteo?.fetchedAt,
+      reason: openMeteo ? null : "source unavailable",
+      derivedFrom: hasModelRain(openMeteo) ? ["openMeteo.precipitation"] : []
+    }, { now }),
+    normalizeWgrSourceContribution({
+      id: "met-norway",
+      role: "forecast-confirmation",
+      available: !!metNorway,
+      used: hasMetNorwayRain(metNorway),
+      timestamp: firstTimestamp(metNorway?.updatedAt, metNorway?.timeseries?.[0]?.time),
+      fetchedAt: metNorway?.fetchedAt,
+      reason: metNorway ? null : "source unavailable",
+      derivedFrom: hasMetNorwayRain(metNorway) ? ["metNorway.timeseries.next1h"] : []
+    }, { now }),
+    normalizeWgrSourceContribution({
+      id: "ecowitt",
+      role: "local-observation",
+      available: ecowittObservation?.ok === true,
+      used: stationConfirmsRain,
+      timestamp: firstTimestamp(ecowittObservation?.updatedAt, ecowittObservation?.current?.timestamp, ecowittObservation?.current?.time),
+      fetchedAt: ecowittObservation?.fetchedAt,
+      freshness: ecowittObservation?.stale === true ? "stale" : null,
+      reason: ecowittObservation?.ok ? null : "source unavailable",
+      derivedFrom: stationConfirmsRain ? ["ecowitt.current.rainRateMmPerHour"] : []
+    }, { now }),
+    normalizeWgrSourceContribution({
+      id: "garden-state",
+      role: "garden-context",
+      available: !!garden,
+      used: !!garden,
+      timestamp: garden?.updatedAt,
+      reason: garden ? null : "garden context not provided in this synthesis",
+      derivedFrom: garden ? ["garden.state"] : []
+    }, { now })
+  ];
+}
+
+function buildTimelineModel({ meteoFranceRadar, rainViewer, now }) {
+  const observedFrames = collectObservedTimelineFrames(meteoFranceRadar, rainViewer);
+  const latestFrame = observedFrames[observedFrames.length - 1] || null;
+
+  return buildWgrTimeline({
+    generatedAt: now,
+    observedFrames,
+    currentFrame: latestFrame ? {
+      ...latestFrame,
+      kind: "current",
+      phase: "aggregated",
+      label: "Frame WGR actuelle"
+    } : {
+      kind: "current",
+      phase: "unavailable",
+      available: false,
+      reason: "Aucune frame observée disponible pour construire la frame WGR actuelle."
+    },
+    futureFrames: [buildUnavailableFutureFrame({ now, minutes: 30, reason: WGR_UNAVAILABLE_PROJECTION_REASON })],
+    explanation: "Sprint 1 fournit le contrat de timeline WGR sans générer de projection radar future."
+  });
+}
+
+function collectObservedTimelineFrames(meteoFranceRadar, rainViewer) {
+  return [
+    ...mapRadarFramesToWgrTimeline(meteoFranceRadar?.wgr?.frames, "meteofrance-radar", "meteofrance.wgr.frames"),
+    ...mapRadarFramesToWgrTimeline(rainViewer?.wgr?.frames, "rainviewer", "rainviewer.wgr.frames")
+  ].sort((a, b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")));
+}
+
+function mapRadarFramesToWgrTimeline(frames, contributor, derivedFrom) {
+  if (!Array.isArray(frames)) {
+    return [];
+  }
+
+  return frames.map((frame) => ({
+    kind: "observed",
+    phase: "observed",
+    available: true,
+    timestamp: frame.timestamp,
+    contributors: [contributor],
+    derivedFrom: [derivedFrom],
+    confidence: frame.confidence
+  })).filter((frame) => frame.timestamp);
 }
 
 function hasRadarRainAmount(meteoFranceRadar) {
@@ -136,14 +298,34 @@ function pickWgrState({ nativeOk, rainViewerOk, sourceStatus }) {
   return "unavailable";
 }
 
-function buildExplanations({ state, nativeOk, rainViewerOk, observedRain, imminentRain, stationConfirmsRain, modelRain, coherence, rain }) {
+function pickWgrGlobalState({ nativeOk, rainViewerOk, sourceStatus, contributions, stationConfirmsRain, modelRain, rain }) {
+  if (!nativeOk && !rainViewerOk) {
+    return sourceStatus.some((status) => status.freshness === "stale") ? "stale" : "unavailable";
+  }
+
+  if (sourceStatus.some((status) => status.freshness === "stale")) {
+    return "stale";
+  }
+
+  if (stationConfirmsRain || modelRain || rain) {
+    return "fresh";
+  }
+
+  return contributions.some((item) => item.used) ? "degraded" : "unavailable";
+}
+
+function buildExplanations({ state, globalState, nativeOk, rainViewerOk, observedRain, imminentRain, stationConfirmsRain, modelRain, coherence, rain }) {
   const explanations = [];
 
   if (nativeOk) {
-    explanations.push("Météo-France native radar is verified for display.");
-  } else if (rainViewerOk) {
-    explanations.push("RainViewer is used as the visual radar fallback.");
-  } else {
+    explanations.push("Météo-France native radar contributes to WGR.");
+  }
+
+  if (rainViewerOk) {
+    explanations.push("RainViewer contributes as a normal WGR radar source.");
+  }
+
+  if (!nativeOk && !rainViewerOk) {
     explanations.push("No usable radar frame is available.");
   }
 
@@ -165,6 +347,7 @@ function buildExplanations({ state, nativeOk, rainViewerOk, observedRain, immine
 
   explanations.push(`Source coherence: ${coherence}.`);
   explanations.push(`WGR state: ${state}.`);
+  explanations.push(`WGR global state: ${globalState}.`);
   return explanations;
 }
 
@@ -175,6 +358,27 @@ function collectDerivedFrom({ nativeOk, rainViewerOk, stationConfirmsRain, model
     stationConfirmsRain ? "ecowitt.current.rainRateMmPerHour" : null,
     modelRain ? "forecast.precipitation" : null,
     rain ? "status.rain" : null
+  ].filter(Boolean);
+}
+
+function collectConfidenceReasons({ nativeOk, rainViewerOk, stationConfirmsRain, modelRain, coherence }) {
+  return [
+    nativeOk ? "verified_meteofrance_radar" : null,
+    rainViewerOk ? "rainviewer_radar_available" : null,
+    stationConfirmsRain ? "fresh_local_station_rain" : null,
+    modelRain ? "forecast_precipitation_available" : null,
+    coherence === "observed_and_model_agree" ? "observed_and_model_agree" : null
+  ].filter(Boolean);
+}
+
+function collectDegradationReasons({ state, globalState, sourceStatus, contributions, modelRain, stationConfirmsRain }) {
+  return [
+    state === "fallback_rainviewer" ? "meteofrance_native_unavailable" : null,
+    globalState === "degraded" ? "wgr_has_partial_source_context" : null,
+    !modelRain ? "no_model_rain_used" : null,
+    !stationConfirmsRain ? "no_fresh_station_rain_confirmation" : null,
+    ...sourceStatus.filter((status) => status.freshness === "stale").map((status) => `${status.source}_stale`),
+    ...contributions.filter((item) => item.ignored).map((item) => `${item.id}_ignored`)
   ].filter(Boolean);
 }
 
@@ -224,8 +428,11 @@ function pickRadiusKm(rain) {
   return 160;
 }
 
+function firstTimestamp(...values) {
+  return values.find(Boolean) || null;
+}
+
 function numberOrNull(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
-
