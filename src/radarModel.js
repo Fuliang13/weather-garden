@@ -36,6 +36,13 @@ const FUTURE_PROJECTION_HORIZONS_MINUTES = [15, 30];
 const FUTURE_PROJECTION_MAX_LATEST_AGE_MINUTES = 20;
 const FUTURE_PROJECTION_MIN_INTERVAL_MINUTES = 3;
 const FUTURE_PROJECTION_MAX_INTERVAL_MINUTES = 20;
+const WGR_FUSION_HORIZONS = [
+  { key: "now", horizonMinutes: 0, label: "now" },
+  { key: "+15 min", horizonMinutes: 15, label: "+15 min" },
+  { key: "+30 min", horizonMinutes: 30, label: "+30 min" }
+];
+const FUSION_RAIN_THRESHOLD_MM = 0.1;
+const FUSION_RAIN_PROBABILITY_THRESHOLD = 0.35;
 const SENSITIVE_KEY_PATTERN = /(api|token|secret|key|authorization|header|cookie|signed|url|payload|raw|mac|imei)/i;
 const URL_PATTERN = /https?:\/\//i;
 const SENSITIVE_URL_PATTERN = /(token|apikey|api_key|bearer|authorization|signature|signed|secret|credential|password)/i;
@@ -277,6 +284,7 @@ export function normalizeRadarSynthesis(input = {}) {
     finalLayer: normalizeWgrFinalLayer(input.finalLayer, sourcesUsed),
     timeline: buildWgrTimeline(input.timeline || {}, { generatedAt: input.generatedAt }),
     futureProjection: normalizeFutureProjection(input.futureProjection, { generatedAt: input.generatedAt }),
+    fusion: normalizeWgrFusion(input.fusion, { generatedAt: input.generatedAt }),
     diagnostics: sanitizePublicDiagnostics(input.diagnostics || buildPublicDiagnostics({ globalState, sourcesUsed, sourcesIgnored })),
     derivedFrom: normalizeDerivedFrom(input.derivedFrom),
     explanations: normalizeStringList(input.explanations),
@@ -509,6 +517,611 @@ export function buildWgrFutureProjection({
       motionVector
     }
   }, { generatedAt });
+}
+
+
+export function buildWgrFusion({
+  generatedAt = new Date(),
+  timeline = null,
+  observedTimeline = null,
+  futureProjection = null,
+  radarSignal = null,
+  modelSignals = [],
+  stationSignal = null
+} = {}) {
+  const generatedIso = normalizeIsoDate(generatedAt) || new Date(0).toISOString();
+  const observed = timeline || observedTimeline || {};
+  const projection = normalizeFutureProjection(futureProjection || {}, { generatedAt: generatedIso });
+  const radar = normalizeFusionRadarSignal(radarSignal || buildRadarSignalFromTimeline(observed), { generatedAt: generatedIso });
+  const models = Array.isArray(modelSignals)
+    ? modelSignals.map((signal) => normalizeFusionModelSignal(signal, { generatedAt: generatedIso })).filter((signal) => signal.sourceId)
+    : [];
+  const station = normalizeFusionStationSignal(stationSignal || {}, { generatedAt: generatedIso });
+  const horizons = WGR_FUSION_HORIZONS.map((horizon) => buildFusionHorizon({
+    horizon,
+    radar,
+    projection,
+    models,
+    station
+  }));
+  const disagreements = detectFusionDisagreements({ radar, models, station, horizons });
+  const sourcesUsed = collectFusionSourcesUsed({ radar, projection, models, station, horizons });
+  const sourcesIgnored = collectFusionSourcesIgnored({ radar, models, station });
+  const available = sourcesUsed.length > 0;
+  const confidence = computeFusionConfidence({ available, horizons, disagreements, radar, models, station });
+  const confidenceReasons = collectFusionConfidenceReasons({ horizons, radar, models, station, projection, disagreements });
+  const degradationReasons = collectFusionDegradationReasons({ available, disagreements, radar, models, station, sourcesIgnored });
+  const status = !available ? "unavailable" : degradationReasons.length > 0 ? "degraded" : "available";
+
+  return normalizeWgrFusion({
+    available,
+    status,
+    method: "weighted-evidence-v1",
+    generatedAt: generatedIso,
+    horizons,
+    localRainSignal: buildLocalRainSignal(horizons, radar, models, station, projection),
+    radarSignal: radar,
+    modelSignal: buildModelSignalSummary(models),
+    stationSignal: station,
+    confidence,
+    confidenceReasons,
+    degradationReasons,
+    disagreements,
+    sourcesUsed,
+    sourcesIgnored,
+    diagnostics: {
+      horizonCount: horizons.length,
+      disagreementCount: disagreements.length,
+      predictionObservationSeparated: true,
+      uncertaintyExplicit: true,
+      kalmanReady: true
+    }
+  }, { generatedAt: generatedIso });
+}
+
+function normalizeWgrFusion(input = {}, options = {}) {
+  const generatedAt = normalizeIsoDate(input.generatedAt || options.generatedAt) || new Date(0).toISOString();
+  const horizons = Array.isArray(input.horizons)
+    ? input.horizons.map((horizon) => normalizeFusionHorizon(horizon)).filter((horizon) => horizon.key)
+    : [];
+  const available = input.available === true || horizons.some((horizon) => horizon.available);
+  const status = normalizeString(input.status || input.state) || (available ? "available" : "unavailable");
+
+  return {
+    type: "WgrFusion",
+    available,
+    status,
+    state: status,
+    method: normalizeString(input.method) || "weighted-evidence-v1",
+    generatedAt,
+    horizons,
+    localRainSignal: normalizeFusionObject(input.localRainSignal),
+    radarSignal: normalizeFusionObject(input.radarSignal),
+    modelSignal: normalizeFusionObject(input.modelSignal),
+    stationSignal: normalizeFusionObject(input.stationSignal),
+    confidence: normalizeConfidence(input.confidence || { score: null, label: available ? "unknown" : "unavailable" }),
+    confidenceReasons: normalizeStringList(input.confidenceReasons),
+    degradationReasons: normalizeStringList(input.degradationReasons),
+    disagreements: normalizeFusionDisagreements(input.disagreements),
+    sourcesUsed: normalizeSourceList(input.sourcesUsed),
+    sourcesIgnored: normalizeSourceList(input.sourcesIgnored),
+    diagnostics: sanitizePublicDiagnostics(input.diagnostics),
+    publicSafe: true
+  };
+}
+
+function normalizeFusionHorizon(input = {}) {
+  const horizonMinutes = finiteOrNull(input.horizonMinutes);
+  const probability = clampNumber(input.probability, 0, 1);
+  const confidence = normalizeConfidence(input.confidence);
+  const available = input.available !== false && (Number.isFinite(probability) || normalizeSourceList(input.sourcesUsed).length > 0);
+
+  return {
+    key: normalizeString(input.key) || (Number.isFinite(horizonMinutes) ? `+${horizonMinutes} min` : null),
+    horizonMinutes,
+    label: normalizeString(input.label),
+    available,
+    status: normalizeString(input.status || input.state) || (available ? "available" : "unavailable"),
+    rainLikely: input.rainLikely === true,
+    intensity: normalizeIntensity(input.intensity),
+    probability,
+    sourceDominant: normalizeSourceId(input.sourceDominant),
+    confidence,
+    reasons: normalizeStringList(input.reasons),
+    degradationReasons: normalizeStringList(input.degradationReasons),
+    sourcesUsed: normalizeSourceList(input.sourcesUsed),
+    sourcesIgnored: normalizeSourceList(input.sourcesIgnored),
+    diagnostics: sanitizePublicDiagnostics(input.diagnostics),
+    publicSafe: true
+  };
+}
+
+function buildFusionHorizon({ horizon, radar, projection, models, station }) {
+  const evidence = [];
+  const reasons = [];
+  const degradationReasons = [];
+  const horizonMinutes = horizon.horizonMinutes;
+
+  if (radar.available && horizonMinutes === 0) {
+    evidence.push(buildFusionEvidence({
+      sourceId: radar.sourceId,
+      role: "radar-observation",
+      probability: radar.rainLikely ? 0.9 : 0.15,
+      weight: radar.freshness === "fresh" ? 0.45 : 0.2,
+      precipitationMm: radar.precipitationMm,
+      reason: radar.rainLikely ? "fresh_radar_observed_rain" : "radar_observed_no_local_rain_amount"
+    }));
+    reasons.push(radar.rainLikely ? "Radar observed rain contributes to current local rain." : "Radar is available but does not prove local rain.");
+  }
+
+  if (projection.available && horizonMinutes > 0) {
+    const frame = projection.frames.find((item) => item.horizonMinutes === horizonMinutes && item.available);
+    if (frame) {
+      evidence.push(buildFusionEvidence({
+        sourceId: "wgr",
+        role: "radar-extrapolation",
+        probability: radar.rainLikely ? 0.65 : 0.25,
+        weight: 0.28,
+        precipitationMm: radar.precipitationMm,
+        reason: radar.rainLikely ? "radar_extrapolation_available" : "radar_motion_available_without_rain_amount"
+      }));
+      reasons.push(`Radar extrapolation contributes to ${horizon.label}.`);
+    }
+  }
+
+  models.forEach((model) => {
+    const modelHorizon = pickFusionModelHorizon(model, horizonMinutes);
+    if (!model.available || model.freshness === "unavailable" || !modelHorizon?.available) {
+      return;
+    }
+
+    const modelProbability = modelHorizon.probability ?? precipitationToProbability(modelHorizon.precipitationMm);
+    evidence.push(buildFusionEvidence({
+      sourceId: model.sourceId,
+      role: model.role,
+      probability: modelProbability,
+      weight: model.sourceId === "open-meteo-arome" ? 0.34 : 0.2,
+      precipitationMm: modelHorizon.precipitationMm,
+      reason: modelHorizon.rainLikely ? `${model.sourceId}_predicts_rain` : `${model.sourceId}_predicts_dry`
+    }));
+    reasons.push(`${sourceLabel(model.sourceId)} contributes to ${horizon.label}.`);
+  });
+
+  if (station.available && station.freshness === "fresh") {
+    const stationProbability = pickStationFusionProbability(station, horizonMinutes);
+    const stationWeight = horizonMinutes === 0 ? 0.35 : horizonMinutes <= 15 ? 0.12 : 0.05;
+    evidence.push(buildFusionEvidence({
+      sourceId: "ecowitt",
+      role: "local-observation",
+      probability: stationProbability,
+      weight: stationWeight,
+      precipitationMm: station.rainRateMmPerHour,
+      reason: station.rainLikely ? "fresh_station_reports_rain" : "fresh_station_context"
+    }));
+    reasons.push(station.rainLikely ? "Fresh Ecowitt station confirms local rain." : "Fresh Ecowitt station gives local context.");
+  } else if (station.available && station.freshness === "stale") {
+    degradationReasons.push("ecowitt_stale_for_fusion");
+  }
+
+  if (!evidence.length) {
+    return normalizeFusionHorizon({
+      key: horizon.key,
+      horizonMinutes,
+      label: horizon.label,
+      available: false,
+      status: "unavailable",
+      rainLikely: false,
+      intensity: { level: "unknown", mmPerHour: null },
+      probability: null,
+      confidence: { score: null, label: "unavailable" },
+      reasons: [],
+      degradationReasons: ["No usable source for this fusion horizon."],
+      sourcesUsed: [],
+      sourcesIgnored: []
+    });
+  }
+
+  const probability = weightedEvidenceProbability(evidence);
+  const dominant = evidence.reduce((best, item) => item.weightedProbability > best.weightedProbability ? item : best, evidence[0]);
+  const confidence = computeHorizonFusionConfidence({ evidence, probability, degradationReasons });
+  const intensity = pickFusionIntensity(evidence);
+
+  return normalizeFusionHorizon({
+    key: horizon.key,
+    horizonMinutes,
+    label: horizon.label,
+    available: true,
+    status: degradationReasons.length ? "degraded" : "available",
+    rainLikely: probability >= FUSION_RAIN_PROBABILITY_THRESHOLD,
+    intensity,
+    probability,
+    sourceDominant: dominant.sourceId,
+    confidence,
+    reasons: [...reasons, ...evidence.map((item) => item.reason)],
+    degradationReasons,
+    sourcesUsed: evidence.map((item) => item.sourceId),
+    sourcesIgnored: [],
+    diagnostics: {
+      evidenceCount: evidence.length,
+      evidenceRoles: [...new Set(evidence.map((item) => item.role))]
+    }
+  });
+}
+
+function buildFusionEvidence({ sourceId, role, probability, weight, precipitationMm, reason }) {
+  const safeProbability = clampNumber(probability, 0, 1) ?? 0;
+  const safeWeight = clampNumber(weight, 0, 1) ?? 0;
+
+  return {
+    sourceId: normalizeSourceId(sourceId),
+    role: normalizeString(role),
+    probability: safeProbability,
+    weight: safeWeight,
+    weightedProbability: safeProbability * safeWeight,
+    precipitationMm: finiteOrNull(precipitationMm),
+    reason: normalizeString(reason)
+  };
+}
+
+function normalizeFusionRadarSignal(input = {}, options = {}) {
+  const sourceId = normalizeSourceId(input.sourceId || input.source || "wgr");
+  const freshness = normalizeWgrState(input.freshness || input.state) || (input.available ? "degraded" : "unavailable");
+  const precipitationMm = finiteOrNull(input.precipitationMm ?? input.rainMm);
+  const rainLikely = input.rainLikely === true || (Number.isFinite(precipitationMm) && precipitationMm >= FUSION_RAIN_THRESHOLD_MM);
+
+  return {
+    type: "WgrFusionRadarSignal",
+    sourceId,
+    sourceLabel: normalizeString(input.sourceLabel) || sourceLabel(sourceId),
+    available: input.available === true,
+    freshness,
+    rainLikely,
+    precipitationMm,
+    currentFrameId: normalizeString(input.currentFrameId),
+    currentFrameTimestamp: normalizeIsoDate(input.currentFrameTimestamp || input.timestamp),
+    confidence: normalizeConfidence(input.confidence),
+    degradationReasons: normalizeStringList(input.degradationReasons),
+    diagnostics: sanitizePublicDiagnostics(input.diagnostics),
+    publicSafe: true
+  };
+}
+
+function buildRadarSignalFromTimeline(timeline = {}) {
+  const currentFrame = timeline.currentFrame || null;
+  return {
+    sourceId: currentFrame?.sourceId || "wgr",
+    sourceLabel: currentFrame?.sourceLabel || null,
+    available: currentFrame?.available === true,
+    freshness: currentFrame?.freshness || "unavailable",
+    currentFrameId: currentFrame?.id || null,
+    currentFrameTimestamp: currentFrame?.timestamp || null,
+    confidence: currentFrame?.confidence || null
+  };
+}
+
+function normalizeFusionModelSignal(input = {}, options = {}) {
+  const sourceId = normalizeSourceId(input.sourceId || input.source || input.id);
+  const available = input.available === true || input.ok === true;
+  const freshness = normalizeWgrState(input.freshness || input.state) || (available ? "degraded" : "unavailable");
+  const horizons = Array.isArray(input.horizons)
+    ? input.horizons.map((horizon) => normalizeFusionModelHorizon(horizon)).filter((horizon) => Number.isFinite(horizon.horizonMinutes))
+    : [];
+
+  return {
+    type: "WgrFusionModelSignal",
+    sourceId,
+    sourceLabel: normalizeString(input.sourceLabel) || sourceLabel(sourceId),
+    role: normalizeString(input.role || inferSourceRole(sourceId)),
+    available,
+    freshness,
+    horizons,
+    confidence: normalizeConfidence(input.confidence),
+    degradationReasons: normalizeStringList(input.degradationReasons),
+    diagnostics: sanitizePublicDiagnostics(input.diagnostics),
+    publicSafe: true
+  };
+}
+
+function normalizeFusionModelHorizon(input = {}) {
+  const horizonMinutes = finiteOrNull(input.horizonMinutes ?? input.minutes);
+  const precipitationMm = finiteOrNull(input.precipitationMm ?? input.rainMm ?? input.precipitation);
+  const probability = clampNumber(input.probability ?? input.rainProbability, 0, 1) ?? precipitationToProbability(precipitationMm);
+  const rainLikely = input.rainLikely === true || probability >= FUSION_RAIN_PROBABILITY_THRESHOLD || (Number.isFinite(precipitationMm) && precipitationMm >= FUSION_RAIN_THRESHOLD_MM);
+
+  return {
+    horizonMinutes,
+    available: input.available !== false && (Number.isFinite(precipitationMm) || Number.isFinite(probability)),
+    precipitationMm,
+    probability,
+    rainLikely,
+    intensity: normalizeIntensity(input.intensity || { level: intensityLevelFromMm(precipitationMm), mmPerHour: precipitationMm }),
+    publicSafe: true
+  };
+}
+
+function normalizeFusionStationSignal(input = {}, options = {}) {
+  const available = input.available === true || input.ok === true;
+  const freshness = normalizeWgrState(input.freshness || input.state) || (available ? "degraded" : "unavailable");
+  const rainRateMmPerHour = finiteOrNull(input.rainRateMmPerHour ?? input.precipitationMm ?? input.rainMm);
+  const humidityPct = finiteOrNull(input.humidityPct ?? input.relativeHumidityPct);
+
+  return {
+    type: "WgrFusionStationSignal",
+    sourceId: "ecowitt",
+    sourceLabel: normalizeString(input.sourceLabel || input.label) || sourceLabel("ecowitt"),
+    available,
+    freshness,
+    rainLikely: input.rainLikely === true || (Number.isFinite(rainRateMmPerHour) && rainRateMmPerHour >= FUSION_RAIN_THRESHOLD_MM),
+    rainRateMmPerHour,
+    humidityPct,
+    temperatureC: finiteOrNull(input.temperatureC),
+    pressureHpa: finiteOrNull(input.pressureHpa),
+    confidence: normalizeConfidence(input.confidence),
+    degradationReasons: normalizeStringList(input.degradationReasons),
+    diagnostics: sanitizePublicDiagnostics(input.diagnostics),
+    publicSafe: true
+  };
+}
+
+function pickStationFusionProbability(station, horizonMinutes) {
+  if (horizonMinutes === 0) {
+    return station.rainLikely ? 0.95 : station.humidityPct >= 85 ? 0.18 : 0.08;
+  }
+
+  if (station.rainLikely && horizonMinutes <= 15) {
+    return 0.4;
+  }
+
+  if (station.humidityPct >= 85) {
+    return 0.18;
+  }
+
+  return 0.08;
+}
+
+function pickFusionModelHorizon(model, horizonMinutes) {
+  return model.horizons.find((horizon) => horizon.horizonMinutes === horizonMinutes)
+    || model.horizons.find((horizon) => horizon.horizonMinutes >= horizonMinutes)
+    || null;
+}
+
+function precipitationToProbability(precipitationMm) {
+  if (!Number.isFinite(precipitationMm)) {
+    return null;
+  }
+
+  return clampNumber(precipitationMm / 1.2, 0, 1);
+}
+
+function weightedEvidenceProbability(evidence) {
+  const totalWeight = evidence.reduce((sum, item) => sum + item.weight, 0);
+  if (totalWeight <= 0) {
+    return null;
+  }
+
+  return Number((evidence.reduce((sum, item) => sum + item.weightedProbability, 0) / totalWeight).toFixed(2));
+}
+
+function computeHorizonFusionConfidence({ evidence, probability, degradationReasons }) {
+  if (!evidence.length || !Number.isFinite(probability)) {
+    return { score: null, label: "unavailable" };
+  }
+
+  let score = 0.35 + Math.min(0.3, evidence.length * 0.08);
+  const hasObservation = evidence.some((item) => ["radar-observation", "local-observation"].includes(item.role));
+  const hasPrediction = evidence.some((item) => ["forecast-primary", "forecast-confirmation", "radar-extrapolation"].includes(item.role));
+
+  if (hasObservation && hasPrediction) {
+    score += 0.18;
+  }
+
+  if (degradationReasons.length) {
+    score -= 0.18;
+  }
+
+  score = clampNumber(Number(score.toFixed(2)), 0, 0.92);
+  return { score, label: confidenceLabel(score) };
+}
+
+function computeFusionConfidence({ available, horizons, disagreements, radar, models, station }) {
+  if (!available) {
+    return { score: null, label: "unavailable" };
+  }
+
+  const scores = horizons.map((horizon) => horizon.confidence?.score).filter(Number.isFinite);
+  const averageScore = scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 0.35;
+  const modelCount = models.filter((model) => model.available && model.freshness !== "unavailable").length;
+  let score = averageScore;
+
+  if (radar.available && radar.freshness === "fresh") {
+    score += 0.08;
+  }
+
+  if (station.available && station.freshness === "fresh") {
+    score += 0.06;
+  }
+
+  if (modelCount >= 2) {
+    score += 0.06;
+  }
+
+  if (disagreements.length) {
+    score -= Math.min(0.28, disagreements.length * 0.12);
+  }
+
+  score = clampNumber(Number(score.toFixed(2)), 0, 0.95);
+  return { score, label: confidenceLabel(score) };
+}
+
+function pickFusionIntensity(evidence) {
+  const maxRain = Math.max(...evidence.map((item) => item.precipitationMm).filter(Number.isFinite), 0);
+  return { level: intensityLevelFromMm(maxRain), mmPerHour: maxRain || null };
+}
+
+function intensityLevelFromMm(value) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "none";
+  }
+
+  if (value < 0.5) {
+    return "light";
+  }
+
+  if (value < 3) {
+    return "moderate";
+  }
+
+  return "heavy";
+}
+
+function detectFusionDisagreements({ radar, models, station, horizons }) {
+  const disagreements = [];
+  const nowHorizon = horizons.find((horizon) => horizon.horizonMinutes === 0);
+  const futureHorizons = horizons.filter((horizon) => horizon.horizonMinutes > 0);
+  const primaryModel = models.find((model) => model.sourceId === "open-meteo-arome" && model.available && model.freshness !== "unavailable");
+  const confirmationModel = models.find((model) => model.sourceId === "met-norway" && model.available && model.freshness !== "unavailable");
+
+  if (radar.available && nowHorizon?.available && primaryModel) {
+    const modelNow = pickFusionModelHorizon(primaryModel, 0);
+    if (modelNow?.available && radar.rainLikely !== modelNow.rainLikely) {
+      disagreements.push(buildFusionDisagreement("radar_model_disagreement_now", "now", [radar.sourceId, primaryModel.sourceId], "Radar and Open-Meteo do not agree for current rain."));
+    }
+  }
+
+  if (station.available && station.freshness === "fresh" && radar.available && station.rainLikely !== radar.rainLikely) {
+    disagreements.push(buildFusionDisagreement("station_radar_disagreement_now", "now", ["ecowitt", radar.sourceId], "Ecowitt and radar do not agree for current rain."));
+  }
+
+  if (primaryModel && confirmationModel) {
+    futureHorizons.forEach((horizon) => {
+      const primary = pickFusionModelHorizon(primaryModel, horizon.horizonMinutes);
+      const confirmation = pickFusionModelHorizon(confirmationModel, horizon.horizonMinutes);
+      if (primary?.available && confirmation?.available && primary.rainLikely !== confirmation.rainLikely) {
+        disagreements.push(buildFusionDisagreement("model_disagreement", horizon.key, [primaryModel.sourceId, confirmationModel.sourceId], `Forecast models disagree for ${horizon.key}.`));
+      }
+    });
+  }
+
+  return disagreements;
+}
+
+function buildFusionDisagreement(type, horizon, sources, reason) {
+  return {
+    type,
+    horizon,
+    sources: normalizeSourceList(sources),
+    reason
+  };
+}
+
+function collectFusionSourcesUsed({ radar, projection, models, station, horizons }) {
+  return normalizeSourceList([
+    radar.available ? radar.sourceId : null,
+    projection.available ? "wgr" : null,
+    ...normalizeSourceList(projection.sourceIds || []),
+    ...models.filter((model) => model.available && model.freshness !== "unavailable" && model.horizons.some((horizon) => horizon.available)).map((model) => model.sourceId),
+    station.available && station.freshness === "fresh" ? "ecowitt" : null,
+    ...horizons.flatMap((horizon) => horizon.sourcesUsed || [])
+  ]);
+}
+
+function collectFusionSourcesIgnored({ radar, models, station }) {
+  return normalizeSourceList([
+    !radar.available && radar.sourceId !== WGR_SOURCE_ID ? radar.sourceId : null,
+    ...models.filter((model) => !model.available || model.freshness === "unavailable").map((model) => model.sourceId),
+    station.available && station.freshness === "stale" ? "ecowitt" : null,
+    !station.available ? "ecowitt" : null
+  ]);
+}
+
+function collectFusionConfidenceReasons({ horizons, radar, models, station, projection, disagreements }) {
+  return [
+    radar.available && radar.freshness === "fresh" ? "fresh_radar_observation_available" : null,
+    projection.available ? "radar_projection_available" : null,
+    models.some((model) => model.sourceId === "open-meteo-arome" && hasUsableFusionModel(model)) ? "open_meteo_arome_available" : null,
+    models.some((model) => model.sourceId === "met-norway" && hasUsableFusionModel(model)) ? "met_norway_confirmation_available" : null,
+    station.available && station.freshness === "fresh" ? "fresh_ecowitt_observation_available" : null,
+    horizons.some((horizon) => horizon.rainLikely && horizon.confidence?.label === "high") ? "high_confidence_rain_horizon" : null,
+    disagreements.length === 0 && horizons.some((horizon) => horizon.sourcesUsed.length > 1) ? "sources_agree" : null
+  ].filter(Boolean);
+}
+
+function collectFusionDegradationReasons({ available, disagreements, radar, models, station, sourcesIgnored }) {
+  if (!available) {
+    return ["No usable source for WGR fusion."];
+  }
+
+  return [
+    ...disagreements.map((item) => item.type),
+    radar.available && radar.freshness === "stale" ? "radar_stale_for_fusion" : null,
+    ...models.filter((model) => model.available && model.freshness === "stale").map((model) => `${model.sourceId}_stale_for_fusion`),
+    station.available && station.freshness === "stale" ? "ecowitt_stale_for_fusion" : null,
+    sourcesIgnored.length ? "some_sources_ignored" : null
+  ].filter(Boolean);
+}
+
+function hasUsableFusionModel(model) {
+  return model.available && model.freshness !== "unavailable" && model.horizons.some((horizon) => horizon.available);
+}
+
+function buildLocalRainSignal(horizons, radar, models, station, projection) {
+  const nowHorizon = horizons.find((horizon) => horizon.horizonMinutes === 0) || null;
+
+  return {
+    rainLikelyNow: nowHorizon?.rainLikely === true,
+    probabilityNow: nowHorizon?.probability ?? null,
+    intensityNow: nowHorizon?.intensity || { level: "unknown", mmPerHour: null },
+    prediction: {
+      horizons: horizons.filter((horizon) => horizon.horizonMinutes > 0).map((horizon) => ({
+        key: horizon.key,
+        horizonMinutes: horizon.horizonMinutes,
+        probability: horizon.probability,
+        rainLikely: horizon.rainLikely,
+        confidence: horizon.confidence
+      })),
+      projectionAvailable: projection.available === true,
+      modelSources: models.filter((model) => model.available).map((model) => model.sourceId)
+    },
+    observation: {
+      radarAvailable: radar.available,
+      radarRainLikely: radar.rainLikely,
+      stationAvailable: station.available && station.freshness === "fresh",
+      stationRainLikely: station.rainLikely
+    },
+    uncertainty: nowHorizon?.confidence?.label || "unavailable",
+    publicSafe: true
+  };
+}
+
+function buildModelSignalSummary(models) {
+  return {
+    available: models.some((model) => model.available),
+    sources: models,
+    primarySourceId: models.find((model) => model.sourceId === "open-meteo-arome")?.sourceId || null,
+    confirmationSourceId: models.find((model) => model.sourceId === "met-norway")?.sourceId || null,
+    publicSafe: true
+  };
+}
+
+function normalizeFusionObject(input) {
+  if (!input || typeof input !== "object") {
+    return {};
+  }
+
+  return sanitizePublicDiagnostics(input);
+}
+
+function normalizeFusionDisagreements(disagreements) {
+  if (!Array.isArray(disagreements)) {
+    return [];
+  }
+
+  return disagreements.map((item) => ({
+    type: normalizeString(item.type),
+    horizon: normalizeString(item.horizon),
+    sources: normalizeSourceList(item.sources),
+    reason: normalizeString(item.reason)
+  })).filter((item) => item.type);
 }
 
 function normalizeFutureProjection(input = {}, options = {}) {
@@ -989,6 +1602,15 @@ function finiteOrNull(value) {
 function normalizeSourceId(value) {
   const normalized = normalizeString(value);
   return normalized ? SOURCE_ALIASES[normalized.toLowerCase()] || normalized.toLowerCase() : null;
+}
+
+function clampNumber(value, min, max) {
+  const number = finiteOrNull(value);
+  if (!Number.isFinite(number)) {
+    return null;
+  }
+
+  return Math.min(max, Math.max(min, number));
 }
 
 function normalizeString(value) {

@@ -1,4 +1,5 @@
 import {
+  buildWgrFusion,
   buildWgrFutureProjection,
   buildWgrTimeline,
   normalizeRadarSynthesis,
@@ -47,6 +48,14 @@ export function buildWgrSynthesis({
     observedFrames: timeline.observedFrames,
     generatedAt: now
   });
+  const fusion = buildWgrFusion({
+    generatedAt: now,
+    timeline,
+    futureProjection,
+    radarSignal: buildFusionRadarSignal({ meteoFranceRadar, rainViewer, timeline }),
+    modelSignals: buildFusionModelSignals({ openMeteo, metNorway, now }),
+    stationSignal: buildFusionStationSignal(ecowittObservation)
+  });
   const explanations = buildExplanations({
     state,
     globalState,
@@ -94,10 +103,12 @@ export function buildWgrSynthesis({
       },
       timeline,
       futureProjection,
+      fusion,
       diagnostics: {
         globalState,
         radarStatusCount: sourceStatus.length,
-        contributionCount: contributions.length
+        contributionCount: contributions.length,
+        fusionStatus: fusion.status
       },
       derivedFrom: collectDerivedFrom({ nativeOk, rainViewerOk, stationConfirmsRain, modelRain, rain }),
       explanations
@@ -273,6 +284,142 @@ function mapRadarFramesToWgrTimeline(frames, { sourceId, sourceLabel, derivedFro
     }
   };
   }).filter((frame) => frame.timestamp);
+}
+
+
+function buildFusionRadarSignal({ meteoFranceRadar, rainViewer, timeline }) {
+  const currentFrame = timeline.currentFrame || null;
+  const currentSourceId = currentFrame?.sourceId || null;
+  const radarPayload = currentSourceId === "meteofrance-radar" ? meteoFranceRadar : currentSourceId === "rainviewer" ? rainViewer : meteoFranceRadar || rainViewer;
+  const precipitationMm = numberOrNull(radarPayload?.precipitationMm);
+  const rainProbability = numberOrNull(radarPayload?.probability);
+
+  return {
+    sourceId: currentSourceId || radarPayload?.source || "wgr",
+    sourceLabel: currentFrame?.sourceLabel || null,
+    available: currentFrame?.available === true || radarPayload?.ok === true || radarPayload?.nativeLayer?.ok === true,
+    freshness: currentFrame?.freshness || radarPayload?.state || (radarPayload?.stale ? "stale" : radarPayload?.ok ? "fresh" : "unavailable"),
+    rainLikely: (Number.isFinite(precipitationMm) && precipitationMm >= LOCAL_RAIN_RATE_THRESHOLD) || (Number.isFinite(rainProbability) && rainProbability >= 0.35),
+    precipitationMm,
+    currentFrameId: currentFrame?.id || null,
+    currentFrameTimestamp: currentFrame?.timestamp || null,
+    confidence: currentFrame?.confidence || radarPayload?.confidence || null,
+    degradationReasons: currentFrame?.freshness === "stale" ? ["radar_current_frame_stale"] : [],
+    diagnostics: {
+      currentFrameAvailable: currentFrame?.available === true,
+      currentFrameSourceId: currentSourceId
+    }
+  };
+}
+
+function buildFusionModelSignals({ openMeteo, metNorway, now }) {
+  return [
+    buildOpenMeteoFusionSignal(openMeteo, now),
+    buildMetNorwayFusionSignal(metNorway, now)
+  ];
+}
+
+function buildOpenMeteoFusionSignal(openMeteo, now) {
+  const nowMs = now instanceof Date ? now.getTime() : Date.parse(now);
+  const available = openMeteo?.ok === true || !!openMeteo;
+  const freshness = openMeteo?.stale ? "stale" : available ? "fresh" : "unavailable";
+  const rows = [...(openMeteo?.minutely15 || []), ...(openMeteo?.hourly || [])];
+
+  return {
+    sourceId: "open-meteo-arome",
+    role: "forecast-primary",
+    available,
+    freshness,
+    horizons: [0, 15, 30].map((minutes) => buildOpenMeteoFusionHorizon({ openMeteo, rows, minutes, nowMs }))
+  };
+}
+
+function buildOpenMeteoFusionHorizon({ openMeteo, rows, minutes, nowMs }) {
+  if (minutes === 0) {
+    const precipitationMm = numberOrNull(openMeteo?.current?.precipitation ?? openMeteo?.current?.rain);
+    return {
+      horizonMinutes: 0,
+      available: Number.isFinite(precipitationMm),
+      precipitationMm,
+      probability: precipitationMmToProbability(precipitationMm)
+    };
+  }
+
+  const horizonEndMs = nowMs + minutes * 60_000;
+  const matchingRows = rows.filter((row) => Number.isFinite(row.timeMs) && row.timeMs >= nowMs - 5 * 60_000 && row.timeMs <= horizonEndMs);
+  const precipitationMm = sumNumbers(matchingRows.map((row) => row.precipitation ?? row.rain));
+  const probabilityPct = maxNumber(matchingRows.map((row) => row.precipitation_probability));
+  const probability = Number.isFinite(probabilityPct) ? probabilityPct / 100 : precipitationMmToProbability(precipitationMm);
+
+  return {
+    horizonMinutes: minutes,
+    available: matchingRows.length > 0,
+    precipitationMm,
+    probability
+  };
+}
+
+function buildMetNorwayFusionSignal(metNorway, now) {
+  const nowMs = now instanceof Date ? now.getTime() : Date.parse(now);
+  const available = metNorway?.ok === true || !!metNorway;
+  const freshness = metNorway?.stale ? "stale" : available ? "fresh" : "unavailable";
+
+  return {
+    sourceId: "met-norway",
+    role: "forecast-confirmation",
+    available,
+    freshness,
+    horizons: [0, 15, 30].map((minutes) => buildMetNorwayFusionHorizon({ metNorway, minutes, nowMs }))
+  };
+}
+
+function buildMetNorwayFusionHorizon({ metNorway, minutes, nowMs }) {
+  const rows = metNorway?.timeseries || [];
+  const horizonEndMs = nowMs + Math.max(minutes, 60) * 60_000;
+  const matchingRows = rows.filter((row) => Number.isFinite(row.timeMs) && row.timeMs >= nowMs - 5 * 60_000 && row.timeMs <= horizonEndMs);
+  const precipitationMm = sumNumbers(matchingRows.map((row) => row.next1h?.precipitation_amount));
+
+  return {
+    horizonMinutes: minutes,
+    available: matchingRows.length > 0,
+    precipitationMm,
+    probability: precipitationMmToProbability(precipitationMm)
+  };
+}
+
+function buildFusionStationSignal(ecowittObservation) {
+  const current = ecowittObservation?.current || {};
+  const available = ecowittObservation?.ok === true;
+
+  return {
+    sourceId: "ecowitt",
+    label: ecowittObservation?.label || "Ecowitt",
+    available,
+    freshness: ecowittObservation?.stale === true ? "stale" : available ? "fresh" : "unavailable",
+    rainRateMmPerHour: numberOrNull(current.rainRateMmPerHour),
+    humidityPct: numberOrNull(current.humidityPct),
+    temperatureC: numberOrNull(current.temperatureC),
+    pressureHpa: numberOrNull(current.pressureHpa ?? current.pressureRelativeHpa)
+  };
+}
+
+function precipitationMmToProbability(value) {
+  const number = numberOrNull(value);
+  if (!Number.isFinite(number)) {
+    return null;
+  }
+
+  return Math.min(1, Math.max(0, Number((number / 1.2).toFixed(2))));
+}
+
+function sumNumbers(values) {
+  const numbers = values.map((value) => numberOrNull(value)).filter(Number.isFinite);
+  return numbers.length ? Number(numbers.reduce((sum, value) => sum + value, 0).toFixed(2)) : null;
+}
+
+function maxNumber(values) {
+  const numbers = values.map((value) => numberOrNull(value)).filter(Number.isFinite);
+  return numbers.length ? Math.max(...numbers) : null;
 }
 
 function buildObservedPlaybackReason(observedFrames, playbackAvailable) {
