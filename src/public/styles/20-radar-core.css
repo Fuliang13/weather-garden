@@ -1,0 +1,177 @@
+
+.radar-card {
+	overflow: hidden;
+}
+
+.radar-attribution {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	min-height: 1.8rem;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--soft);
+	color: var(--muted);
+	font-size: 0.8rem;
+	font-weight: 650;
+	padding: 0.35rem 0.6rem;
+	white-space: nowrap;
+}
+
+.radar-attribution::after {
+	content: "▾";
+	color: var(--accent);
+	font-size: 0.7rem;
+}
+
+.radar-attribution:hover {
+	border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+	background: color-mix(in srgb, var(--soft) 72%, white);
+	color: var(--text);
+}
+
+.map-layer-panel {
+	display: grid;
+	gap: 0.65rem;
+	border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+	border-radius: 1rem;
+	background: color-mix(in srgb, var(--card) 92%, var(--soft));
+	box-shadow: 0 12px 30px rgba(27, 38, 32, 0.08);
+	padding: 0.75rem;
+}
+
+.map-layer-panel[hidden] {
+	display: none;
+}
+
+.map-layer-panel label {
+	display: grid;
+	gap: 0.3rem;
+	color: var(--muted);
+	font-size: 0.78rem;
+	font-weight: 680;
+}
+
+.map-layer-panel select {
+	width: 100%;
+	min-height: 2.5rem;
+	border: 1px solid var(--border);
+	border-radius: 0.75rem;
+	background: white;
+	color: var(--text);
+	font-weight: 650;
+	padding: 0.5rem 0.65rem;
+}
+
+.map-layer-checkbox {
+	display: flex !important;
+	align-items: center;
+	gap: 0.5rem;
+	color: var(--text) !important;
+}
+
+.map-layer-checkbox input {
+	width: auto;
+}
+
+.radar-layer-panel {
+	flex: 1 1 100%;
+	width: min(100%, 22rem);
+	margin-left: auto;
+}
+
+.garden-layer-panel {
+	width: min(100%, 28rem);
+	margin-left: auto;
+}
+
+.radar-map {
+	width: 100%;
+	height: min(48svh, 540px);
+	min-height: 420px;
+	border: 1px solid var(--border);
+	border-radius: 1rem;
+	background: #dfe7e2;
+	overflow: hidden;
+}
+
+.radar-map .leaflet-container {
+	font: inherit;
+}
+
+.radar-map .leaflet-control-attribution {
+	font-size: 0.7rem;
+}
+
+.radar-empty {
+	display: grid;
+	min-height: 100%;
+	place-items: center;
+	color: var(--muted);
+	text-align: center;
+	padding: 2rem;
+}
+
+.radar-legend {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	margin-top: 0.85rem;
+	border: 1px solid var(--border);
+	border-radius: 1rem;
+	background: color-mix(in srgb, var(--soft) 72%, white);
+	padding: 0.85rem 1rem;
+}
+
+.radar-legend-scale {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem 1rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.radar-legend-scale li {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	color: var(--muted);
+	font-size: 0.9rem;
+}
+
+.radar-swatch {
+	width: 1.3rem;
+	height: 0.65rem;
+	border-radius: 999px;
+}
+
+.radar-light {
+	background: rgba(150, 218, 236, 0.8);
+}
+
+.radar-moderate {
+	background: rgba(38, 132, 204, 0.84);
+}
+
+.radar-heavy {
+	background: rgba(126, 76, 186, 0.86);
+}
+
+.radar-extreme {
+	background: rgba(190, 44, 58, 0.88);
+}
+
+.radar-legend-note {
+	max-width: 23rem;
+	margin: 0;
+	color: var(--muted);
+	font-size: 0.85rem;
+}
+
+.radar-legend[data-has-radar="false"] .radar-legend-scale,
+.radar-legend[data-has-radar="false"] .radar-legend-note {
+	display: none;
+}
