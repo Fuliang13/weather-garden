@@ -3175,14 +3175,44 @@ body[data-active-panel="dashboard"] .panel-nav {
 }
 
 .radar-card-actions button,
+.radar-source-switch button,
 .radar-mode-control select,
 .radar-zoom-status button {
 	min-height: 2.45rem;
 }
 
 .radar-card-actions button.secondary,
+.radar-source-switch,
 .radar-mode-control {
 	box-shadow: 0 3px 10px rgba(27, 38, 32, 0.04);
+}
+
+.radar-source-switch {
+	display: inline-grid;
+	grid-template-columns: repeat(3, minmax(2.5rem, 1fr));
+	align-items: center;
+	overflow: hidden;
+	border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.82);
+	padding: 0.14rem;
+}
+
+.radar-source-switch button {
+	border: 0;
+	border-radius: 999px;
+	background: transparent;
+	color: var(--muted);
+	font-size: 0.78rem;
+	font-weight: 860;
+	letter-spacing: 0.02em;
+	padding: 0.45rem 0.66rem;
+}
+
+.radar-source-switch button[data-active="true"] {
+	background: color-mix(in srgb, var(--accent) 13%, white);
+	color: var(--accent);
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 20%, white);
 }
 
 .radar-layers-button::before {
@@ -3568,7 +3598,8 @@ body[data-active-panel="dashboard"] .panel-nav {
 
 	.dashboard-column,
 	.dashboard-radar-stage {
-		display: contents;
+		display: grid;
+		min-width: 0;
 	}
 
 	.dashboard-block-rain {
@@ -3754,27 +3785,29 @@ body[data-active-panel="dashboard"] .panel-nav {
 }
 
 .radar-meta-strip {
-	display: grid;
-	grid-template-columns: repeat(4, minmax(0, 1fr));
-	gap: 0.48rem;
-	margin: 0.2rem 0 0.15rem;
+	display: flex;
+	align-items: center;
+	gap: 0.38rem;
+	margin: 0.02rem 0 0.12rem;
+	overflow: hidden;
 }
 
 .radar-meta-strip > span {
-	display: grid;
-	gap: 0.12rem;
+	display: inline-flex;
+	align-items: center;
+	gap: 0.32rem;
 	min-width: 0;
 	border: 1px solid color-mix(in srgb, var(--border) 76%, white);
-	border-radius: 0.9rem;
+	border-radius: 999px;
 	background: rgba(255, 255, 255, 0.72);
-	padding: 0.5rem 0.62rem;
+	padding: 0.28rem 0.56rem;
 }
 
 .radar-meta-strip strong {
 	color: var(--muted);
-	font-size: 0.68rem;
+	font-size: 0.62rem;
 	font-weight: 760;
-	letter-spacing: 0.03em;
+	letter-spacing: 0.02em;
 	line-height: 1;
 	text-transform: uppercase;
 }
@@ -3782,7 +3815,7 @@ body[data-active-panel="dashboard"] .panel-nav {
 .radar-meta-strip span span {
 	overflow: hidden;
 	color: var(--text);
-	font-size: 0.84rem;
+	font-size: 0.72rem;
 	font-weight: 780;
 	line-height: 1.12;
 	text-overflow: ellipsis;
@@ -3860,7 +3893,7 @@ body[data-active-panel="dashboard"] .panel-nav {
 
 @media (max-width: 1280px) {
 	.radar-meta-strip {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
+		flex-wrap: wrap;
 	}
 }
 
@@ -3884,12 +3917,16 @@ body[data-active-panel="dashboard"] .panel-nav {
 
 	.radar-card-actions {
 		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
+		grid-template-columns: minmax(0, 1fr) auto auto;
 	}
 
 	.radar-card-actions button {
 		width: 100%;
 		padding-inline: 0.58rem;
+	}
+
+	.radar-source-switch {
+		grid-column: 1 / -1;
 	}
 }
 
@@ -3908,20 +3945,21 @@ body[data-active-panel="dashboard"] .panel-nav {
 	}
 
 	.radar-meta-strip {
-		grid-template-columns: 1fr 1fr;
-		gap: 0.38rem;
+		gap: 0.3rem;
+		overflow: visible;
 	}
 
 	.radar-meta-strip > span {
-		padding: 0.44rem 0.5rem;
+		max-width: 100%;
+		padding: 0.3rem 0.46rem;
 	}
 
 	.radar-meta-strip strong {
-		font-size: 0.62rem;
+		font-size: 0.58rem;
 	}
 
 	.radar-meta-strip span span {
-		font-size: 0.76rem;
+		font-size: 0.68rem;
 	}
 
 	.radar-map-frame {
@@ -3929,11 +3967,16 @@ body[data-active-panel="dashboard"] .panel-nav {
 	}
 
 	.radar-card-actions {
-		grid-template-columns: 1fr;
+		grid-template-columns: 1fr 1fr;
 	}
 
 	.radar-card-actions button {
 		min-height: 2.34rem;
+	}
+
+	.radar-source-switch,
+	.radar-layers-button {
+		grid-column: 1 / -1;
 	}
 }
 
@@ -4013,12 +4056,17 @@ body[data-active-panel="dashboard"] .panel-nav {
 
 	.radar-card-actions {
 		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
+		grid-template-columns: 1fr 1fr;
 	}
 
 	.radar-card-actions button {
 		min-width: 0;
 		padding-inline: 0.45rem;
+	}
+
+	.radar-source-switch,
+	.radar-layers-button {
+		grid-column: 1 / -1;
 	}
 
 	.radar-map-shell {

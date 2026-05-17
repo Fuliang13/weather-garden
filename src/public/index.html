@@ -69,6 +69,11 @@
                 <p id="radarStatus" class="muted">Chargement radar…</p>
               </div>
               <div class="radar-card-actions" aria-label="Actions radar">
+                <div class="radar-source-switch" role="group" aria-label="Source radar">
+                  <button type="button" data-radar-source="wgr" data-active="true">WGR</button>
+                  <button type="button" data-radar-source="meteofrance">MF</button>
+                  <button type="button" data-radar-source="rainviewer">RV</button>
+                </div>
                 <button id="radarZoomToggleButton" type="button" class="secondary radar-auto-button">Zoom auto</button>
                 <button id="radarRefreshButton" type="button" class="secondary">Actualiser</button>
                 <button id="radarLayersButton" type="button" class="secondary radar-layers-button" aria-expanded="false" aria-controls="radarLayerPanel">Couches</button>
@@ -118,9 +123,9 @@
                 <label>
                   Source radar
                   <select id="radarSourceSelect">
-                    <option value="auto">Auto</option>
-                    <option value="meteofrance">Météo-France natif</option>
-                    <option value="rainviewer">RainViewer</option>
+                    <option value="wgr">WGR · Synthèse locale</option>
+                    <option value="meteofrance">MF · Météo-France natif</option>
+                    <option value="rainviewer">RV · RainViewer</option>
                   </select>
                 </label>
                 <label>

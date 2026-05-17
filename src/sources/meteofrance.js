@@ -13,6 +13,15 @@ const METEOFRANCE_HDF5_EXPECTED_DIMENSIONS = { width: 3472, height: 3472 };
 const METEOFRANCE_NATIVE_RASTER_MAX_SIZE = 1024;
 const METEOFRANCE_TOKEN_USER_AGENT_FALLBACK = "weather-garden/0.1";
 const METEOFRANCE_REQUIRED_SECRETS = ["METEOFRANCE_API_KEY", "METEOFRANCE_APPLICATION_ID"];
+export const METEOFRANCE_RAIN_PALETTE = [
+  { min: 20, rgba: [178, 48, 78, 188] },
+  { min: 10, rgba: [158, 70, 172, 178] },
+  { min: 5, rgba: [124, 92, 196, 166] },
+  { min: 2, rgba: [58, 108, 205, 154] },
+  { min: 1, rgba: [44, 135, 214, 138] },
+  { min: 0.2, rgba: [82, 174, 222, 112] },
+  { min: 0, rgba: [142, 210, 232, 76] }
+];
 
 export const METEOFRANCE_RADAR_FRAME_LIMIT = 24;
 
@@ -168,6 +177,11 @@ export async function fetchRainViewerRadar({ latitude, longitude, enabled = true
   const data = await response.json();
   const frames = data.radar?.past || [];
   const latestFrame = frames[frames.length - 1] || null;
+  const recentFrames = frames.slice(-6).map((frame) => ({
+    ...frame,
+    timestamp: frame?.time ? new Date(frame.time * 1000).toISOString() : null,
+    tileUrlTemplate: frame?.path ? `${data.host}${frame.path}/512/{z}/{x}/{y}/2/1_1.png` : null
+  }));
   const imageUrl = latestFrame
     ? `${data.host}${latestFrame.path}/512/7/${latitude}/${longitude}/2/1_1.png`
     : null;
@@ -184,11 +198,11 @@ export async function fetchRainViewerRadar({ latitude, longitude, enabled = true
     frameTime: latestFrame?.time ? new Date(latestFrame.time * 1000).toISOString() : null,
     imageUrl,
     tileUrlTemplate,
-    frames: frames.slice(-6),
+    frames: recentFrames,
     wgr: normalizeRainViewerRadarSequence({
       fetchedAt,
       generatedAt: data.generated ? new Date(data.generated * 1000).toISOString() : null,
-      frames: frames.slice(-6),
+      frames: recentFrames,
       ok: !!imageUrl
     })
   };
@@ -2433,31 +2447,7 @@ function createHdf5NumericReader(bytes, dataType) {
 }
 
 function getMeteoFranceRainColor(value) {
-  if (value >= 20) {
-    return [156, 58, 114, 190];
-  }
-
-  if (value >= 10) {
-    return [184, 62, 96, 182];
-  }
-
-  if (value >= 5) {
-    return [124, 82, 184, 170];
-  }
-
-  if (value >= 2) {
-    return [54, 104, 205, 158];
-  }
-
-  if (value >= 1) {
-    return [45, 132, 214, 142];
-  }
-
-  if (value >= 0.2) {
-    return [82, 169, 220, 118];
-  }
-
-  return [142, 204, 226, 82];
+  return METEOFRANCE_RAIN_PALETTE.find((step) => value >= step.min)?.rgba || METEOFRANCE_RAIN_PALETTE[METEOFRANCE_RAIN_PALETTE.length - 1].rgba;
 }
 
 function encodeAsciiBytes(value) {
