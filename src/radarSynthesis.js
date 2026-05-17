@@ -1,11 +1,11 @@
 import {
+  buildWgrFutureProjection,
   buildWgrTimeline,
   normalizeRadarSynthesis,
   normalizeWgrSourceContribution
 } from "./radarModel.js";
 
 const LOCAL_RAIN_RATE_THRESHOLD = 0.1;
-const WGR_UNAVAILABLE_PROJECTION_REASON = "Projection +30 min indisponible : aucune source suffisante dans ce modèle de test.";
 
 export function buildWgrSynthesis({
   meteoFranceRadar = null,
@@ -43,6 +43,10 @@ export function buildWgrSynthesis({
   });
   const globalState = pickWgrGlobalState({ nativeOk, rainViewerOk, sourceStatus, contributions, stationConfirmsRain, modelRain, rain });
   const timeline = buildTimelineModel({ meteoFranceRadar, rainViewer, now });
+  const futureProjection = buildWgrFutureProjection({
+    observedFrames: timeline.observedFrames,
+    generatedAt: now
+  });
   const explanations = buildExplanations({
     state,
     globalState,
@@ -85,15 +89,11 @@ export function buildWgrSynthesis({
         visualSourceId: timeline.currentFrame?.sourceId || null,
         visualSourceLabel: timeline.currentFrame?.sourceLabel || null,
         visualType: timeline.currentFrame?.visualType || "none",
-        playbackAvailable: timeline.playbackAvailable
+        playbackAvailable: timeline.playbackAvailable,
+        futureProjectionAvailable: futureProjection.available === true
       },
       timeline,
-      futureProjection: {
-        horizonMinutes: 30,
-        state: "unavailable",
-        frameAvailable: false,
-        reason: WGR_UNAVAILABLE_PROJECTION_REASON
-      },
+      futureProjection,
       diagnostics: {
         globalState,
         radarStatusCount: sourceStatus.length,
@@ -266,6 +266,7 @@ function mapRadarFramesToWgrTimeline(frames, { sourceId, sourceLabel, derivedFro
     contributors: [sourceId],
     derivedFrom: [derivedFrom],
     confidence: frame.confidence,
+    motionVector: frame.motionVector || frame.motion,
     diagnostics: {
       provider: sourceId,
       hasVisualReference: !!(frame.tileUrlTemplate || frame.imageUrl || frame.imageDataUrl)

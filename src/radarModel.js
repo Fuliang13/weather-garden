@@ -29,7 +29,13 @@ const SOURCE_LABELS = {
 const WGR_TIMELINE_KINDS = new Set(["observed", "current", "future"]);
 const WGR_PHASES = new Set(["observed", "predicted", "extrapolated", "aggregated", "uncertain", "unavailable"]);
 const WGR_STATES = new Set(["fresh", "stale", "degraded", "unavailable"]);
+const PROJECTION_STATUSES = new Set(["available", "text-only", "unavailable"]);
+const CONFIDENCE_LABELS = new Set(["high", "medium", "low", "unknown", "unavailable"]);
 const VISUAL_TYPES = new Set(["tile", "image", "image-overlay", "data-image", "none"]);
+const FUTURE_PROJECTION_HORIZONS_MINUTES = [15, 30];
+const FUTURE_PROJECTION_MAX_LATEST_AGE_MINUTES = 20;
+const FUTURE_PROJECTION_MIN_INTERVAL_MINUTES = 3;
+const FUTURE_PROJECTION_MAX_INTERVAL_MINUTES = 20;
 const SENSITIVE_KEY_PATTERN = /(api|token|secret|key|authorization|header|cookie|signed|url|payload|raw|mac|imei)/i;
 const URL_PATTERN = /https?:\/\//i;
 const SENSITIVE_URL_PATTERN = /(token|apikey|api_key|bearer|authorization|signature|signed|secret|credential|password)/i;
@@ -141,6 +147,7 @@ export function normalizeWgrSourceContribution(input = {}, options = {}) {
     confidence: normalizeConfidence(input.confidence ?? input.quality?.score),
     quality: normalizeQuality(input.quality || { ok: available, reason: input.reason || input.error || input.fallbackReason }),
     derivedFrom: normalizeDerivedFrom(input.derivedFrom),
+    motionVector: normalizeMotionVector(input.motionVector || input.motion),
     diagnostics: sanitizePublicDiagnostics(input.diagnostics),
     publicSafe: true
   };
@@ -185,16 +192,18 @@ export function normalizeWgrTimelineFrame(input = {}, options = {}) {
     contributors,
     derivedFrom: normalizeDerivedFrom(input.derivedFrom),
     confidence: normalizeConfidence(input.confidence),
+    motionVector: normalizeMotionVector(input.motionVector || input.motion),
     diagnostics: sanitizePublicDiagnostics(input.diagnostics),
     publicSafe: true
   };
 }
 
 export function buildWgrTimeline(input = {}, options = {}) {
-  const observedFrames = normalizeTimelineFrames(input.observedFrames, { ...options, kind: "observed", phase: "observed" });
-  const futureFrames = normalizeTimelineFrames(input.futureFrames, { ...options, kind: "future", phase: "unavailable" });
+  const timelineNow = options.now || input.generatedAt || options.generatedAt;
+  const observedFrames = normalizeTimelineFrames(input.observedFrames, { ...options, now: timelineNow, kind: "observed", phase: "observed" });
+  const futureFrames = normalizeTimelineFrames(input.futureFrames, { ...options, now: timelineNow, kind: "future", phase: "unavailable" });
   const currentFrame = input.currentFrame
-    ? normalizeWgrTimelineFrame(input.currentFrame, { ...options, kind: "current", phase: "aggregated" })
+    ? normalizeWgrTimelineFrame(input.currentFrame, { ...options, now: timelineNow, kind: "current", phase: "aggregated" })
     : buildCurrentTimelineFrame(observedFrames, futureFrames);
   const playbackAvailable = input.playbackAvailable === true || (input.playbackAvailable !== false && observedFrames.filter((frame) => frame.available).length > 1);
   const sources = normalizeSourceList(input.sources || observedFrames.map((frame) => frame.sourceId));
@@ -267,7 +276,7 @@ export function normalizeRadarSynthesis(input = {}) {
     sourcesIgnored,
     finalLayer: normalizeWgrFinalLayer(input.finalLayer, sourcesUsed),
     timeline: buildWgrTimeline(input.timeline || {}, { generatedAt: input.generatedAt }),
-    futureProjection: normalizeFutureProjection(input.futureProjection),
+    futureProjection: normalizeFutureProjection(input.futureProjection, { generatedAt: input.generatedAt }),
     diagnostics: sanitizePublicDiagnostics(input.diagnostics || buildPublicDiagnostics({ globalState, sourcesUsed, sourcesIgnored })),
     derivedFrom: normalizeDerivedFrom(input.derivedFrom),
     explanations: normalizeStringList(input.explanations),
@@ -374,22 +383,307 @@ function normalizeWgrFinalLayer(input = {}, sourcesUsed = []) {
     visualSourceLabel: normalizeString(input.visualSourceLabel) || sourceLabel(input.visualSourceId),
     visualType: normalizeVisualType(input.visualType),
     playbackAvailable: input.playbackAvailable === true,
+    futureProjectionAvailable: input.futureProjectionAvailable === true,
     publicSafe: true
   };
 }
 
-function normalizeFutureProjection(input = {}) {
-  const state = normalizeString(input.state || input.availability || "unavailable");
+export function buildWgrFutureProjection({
+  observedFrames = [],
+  generatedAt = new Date(),
+  horizonsMinutes = FUTURE_PROJECTION_HORIZONS_MINUTES
+} = {}) {
+  const rawObservedFrames = Array.isArray(observedFrames) ? observedFrames : [];
+  const invalidTimestampCount = rawObservedFrames.filter((frame) => !isValidIsoDate(frame?.timestamp || frame?.validityTime || frame?.frameTime)).length;
+  const unavailable = (reason, diagnostics = {}) => normalizeFutureProjection({
+    available: false,
+    status: "unavailable",
+    method: "none",
+    horizonMinutes: Math.max(...horizonsMinutes),
+    frames: [],
+    confidence: { score: null, label: "unavailable" },
+    confidenceReasons: [],
+    degradationReasons: [reason],
+    reason: `Projection +${Math.max(...horizonsMinutes)} min indisponible : ${reason}`,
+    generatedAt,
+    sourceFrameIds: rawObservedFrames.map((frame) => normalizeString(frame?.id)).filter(Boolean),
+    sourceIds: normalizeSourceList(rawObservedFrames.map((frame) => frame?.sourceId || frame?.frameSource || frame?.provider)),
+    diagnostics
+  }, { generatedAt });
+
+  if (invalidTimestampCount > 0) {
+    return unavailable("Observed frame timestamps are invalid.", { invalidTimestampCount });
+  }
+
+  const normalizedObservedFrames = normalizeTimelineFrames(observedFrames, {
+    generatedAt,
+    now: generatedAt,
+    kind: "observed",
+    phase: "observed"
+  }).filter((frame) => frame.available);
+  if (normalizedObservedFrames.length < 2) {
+    return unavailable("Insufficient observed frames.", { observedFrameCount: normalizedObservedFrames.length });
+  }
+
+  const sortedFrames = [...normalizedObservedFrames].sort(compareTimestampLike);
+  const framesWithValidTimestamps = sortedFrames.filter((frame) => isValidIsoDate(frame.timestamp));
+  if (framesWithValidTimestamps.length !== sortedFrames.length) {
+    return unavailable("Observed frame timestamps are invalid.", { observedFrameCount: sortedFrames.length });
+  }
+
+  const latestFrame = sortedFrames[sortedFrames.length - 1];
+  const previousFrame = sortedFrames[sortedFrames.length - 2];
+  const generatedDate = parseDate(generatedAt);
+  const latestDate = parseDate(latestFrame.timestamp);
+  const previousDate = parseDate(previousFrame.timestamp);
+  const latestAgeMinutes = computeAgeMinutes(latestFrame.timestamp, generatedDate);
+
+  if (!Number.isFinite(latestAgeMinutes) || latestAgeMinutes > FUTURE_PROJECTION_MAX_LATEST_AGE_MINUTES || latestFrame.freshness === "stale") {
+    return unavailable("Observed frames are too old.", { latestAgeMinutes });
+  }
+
+  if (latestFrame.sourceId !== previousFrame.sourceId) {
+    return unavailable("Observed frames come from incompatible sources.", {
+      sourceIds: normalizeSourceList([previousFrame.sourceId, latestFrame.sourceId])
+    });
+  }
+
+  const intervalMinutes = Math.round((latestDate.getTime() - previousDate.getTime()) / 60_000);
+  if (!Number.isFinite(intervalMinutes) || intervalMinutes < FUTURE_PROJECTION_MIN_INTERVAL_MINUTES || intervalMinutes > FUTURE_PROJECTION_MAX_INTERVAL_MINUTES) {
+    return unavailable("Observed frame timestamps are not regular enough.", { intervalMinutes });
+  }
+
+  if (!hasUsableVisualReference(latestFrame) || !hasUsableVisualReference(previousFrame) || latestFrame.visualType !== previousFrame.visualType) {
+    return unavailable("Observed frames are not visually compatible.", {
+      visualTypes: [previousFrame.visualType, latestFrame.visualType].filter(Boolean)
+    });
+  }
+
+  const motionVector = normalizeMotionVector(latestFrame.motionVector || previousFrame.motionVector);
+  if (!motionVector) {
+    return unavailable("Motion estimation unavailable for this source.", {
+      sourceId: latestFrame.sourceId,
+      frameCount: sortedFrames.length
+    });
+  }
+
+  const sourceFrameIds = [previousFrame.id, latestFrame.id].filter(Boolean);
+  const confidence = computeProjectionConfidence({
+    frameCount: sortedFrames.length,
+    latestAgeMinutes,
+    intervalMinutes,
+    motionVector
+  });
+  const frames = horizonsMinutes.map((minutes) => buildExtrapolatedProjectionFrame({
+    baseTimestamp: latestFrame.timestamp,
+    horizonMinutes: minutes,
+    sourceFrameIds,
+    confidence,
+    motionVector
+  }));
+
+  return normalizeFutureProjection({
+    available: true,
+    status: "available",
+    method: "metadata-motion-vector",
+    horizonMinutes: Math.max(...horizonsMinutes),
+    frames,
+    confidence,
+    confidenceReasons: [
+      "multiple_observed_frames",
+      "fresh_current_observed_frame",
+      "compatible_radar_source",
+      "regular_observed_timestamps",
+      "motion_vector_available"
+    ],
+    degradationReasons: confidence.score < 0.75 ? ["projection_confidence_not_high"] : [],
+    sourceFrameIds,
+    sourceIds: [latestFrame.sourceId],
+    generatedAt,
+    validUntil: addMinutes(latestFrame.timestamp, Math.max(...horizonsMinutes)),
+    playbackAvailable: frames.length > 1,
+    diagnostics: {
+      sourceFrameCount: sortedFrames.length,
+      intervalMinutes,
+      latestAgeMinutes,
+      motionVector
+    }
+  }, { generatedAt });
+}
+
+function normalizeFutureProjection(input = {}, options = {}) {
+  const status = normalizeProjectionStatus(input.status || input.state || input.availability);
+  const available = input.available === true || status === "available";
+  const generatedAt = normalizeIsoDate(input.generatedAt || options.generatedAt) || new Date(0).toISOString();
+  const frames = Array.isArray(input.frames)
+    ? input.frames.map((frame) => normalizeFutureProjectionFrame(frame, { generatedAt })).filter((frame) => frame.timestamp || frame.available === false)
+    : [];
+  const horizonMinutes = finiteOrNull(input.horizonMinutes) || frames.reduce((max, frame) => Math.max(max, frame.horizonMinutes || 0), 0) || 30;
+  const reason = normalizeString(input.reason || (!available ? `Projection +${horizonMinutes} min indisponible : aucune source suffisante dans ce modèle de test.` : null));
 
   return {
-    horizonMinutes: finiteOrNull(input.horizonMinutes) || 30,
-    state: ["available", "text-only", "unavailable"].includes(state) ? state : "unavailable",
-    frameAvailable: input.frameAvailable === true,
-    textOnly: input.textOnly === true || state === "text-only",
-    reason: normalizeString(input.reason || (state === "unavailable" ? "Projection +30 min indisponible : aucune source suffisante dans ce modèle de test." : null)),
+    available,
+    status,
+    state: status,
+    method: normalizeString(input.method) || (available ? "metadata-motion-vector" : "none"),
+    horizonMinutes,
+    frames,
+    frameCount: frames.length,
+    frameAvailable: frames.some((frame) => frame.available),
+    textOnly: input.textOnly === true || status === "text-only",
+    confidence: normalizeConfidence(input.confidence || { score: null, label: available ? "unknown" : "unavailable" }),
+    confidenceReasons: normalizeStringList(input.confidenceReasons),
+    degradationReasons: normalizeStringList(input.degradationReasons || (reason ? [reason] : [])),
+    sourceFrameIds: normalizeStringList(input.sourceFrameIds || frames.flatMap((frame) => frame.sourceFrameIds || [])),
+    sourceIds: normalizeSourceList(input.sourceIds || frames.flatMap((frame) => frame.sourceIds || [])),
+    generatedAt,
+    validUntil: normalizeIsoDate(input.validUntil),
+    playbackAvailable: input.playbackAvailable === true || frames.length > 1,
+    reason,
+    diagnostics: sanitizePublicDiagnostics(input.diagnostics),
     derivedFrom: normalizeDerivedFrom(input.derivedFrom),
     publicSafe: true
   };
+}
+
+function normalizeFutureProjectionFrame(input = {}, options = {}) {
+  const horizonMinutes = finiteOrNull(input.horizonMinutes) || null;
+  const timestamp = normalizeIsoDate(input.timestamp);
+  const available = input.available !== false;
+
+  return {
+    type: "WgrFutureProjectionFrame",
+    id: normalizeString(input.id) || buildProjectionFrameId(horizonMinutes, timestamp),
+    kind: "extrapolated",
+    timestamp,
+    horizonMinutes,
+    sourceId: WGR_SOURCE_ID,
+    sourceLabel: sourceLabel(WGR_SOURCE_ID),
+    sourceFrameIds: normalizeStringList(input.sourceFrameIds),
+    sourceIds: normalizeSourceList(input.sourceIds),
+    visualType: normalizeVisualType(input.visualType || "none"),
+    confidence: normalizeConfidence(input.confidence),
+    available,
+    reason: normalizeString(input.reason),
+    motionVector: normalizeMotionVector(input.motionVector || input.motion),
+    diagnostics: sanitizePublicDiagnostics(input.diagnostics),
+    generatedAt: normalizeIsoDate(input.generatedAt || options.generatedAt),
+    publicSafe: true
+  };
+}
+
+function buildExtrapolatedProjectionFrame({ baseTimestamp, horizonMinutes, sourceFrameIds, confidence, motionVector }) {
+  return {
+    id: `extrapolated-wgr-${horizonMinutes}min-${String(baseTimestamp || "unknown").replace(/[^0-9]/g, "").slice(0, 14)}`,
+    kind: "extrapolated",
+    timestamp: addMinutes(baseTimestamp, horizonMinutes),
+    horizonMinutes,
+    sourceId: WGR_SOURCE_ID,
+    sourceFrameIds,
+    sourceIds: [WGR_SOURCE_ID],
+    visualType: "none",
+    confidence: horizonMinutes >= 30
+      ? { score: Math.max(0, Number((confidence.score - 0.12).toFixed(2))), label: confidenceLabel(confidence.score - 0.12) }
+      : confidence,
+    available: true,
+    motionVector,
+    diagnostics: {
+      generatedFromObservedMotion: true,
+      horizonMinutes
+    }
+  };
+}
+
+function computeProjectionConfidence({ frameCount, latestAgeMinutes, intervalMinutes, motionVector }) {
+  let score = 0.35;
+
+  if (frameCount >= 3) {
+    score += 0.15;
+  } else if (frameCount >= 2) {
+    score += 0.1;
+  }
+
+  if (latestAgeMinutes <= 10) {
+    score += 0.15;
+  } else if (latestAgeMinutes <= FUTURE_PROJECTION_MAX_LATEST_AGE_MINUTES) {
+    score += 0.08;
+  }
+
+  if (intervalMinutes >= 4 && intervalMinutes <= 10) {
+    score += 0.15;
+  } else {
+    score += 0.05;
+  }
+
+  if (motionVector) {
+    score += 0.2;
+  }
+
+  score = Math.min(0.9, Math.max(0, Number(score.toFixed(2))));
+  return { score, label: confidenceLabel(score) };
+}
+
+function hasUsableVisualReference(frame) {
+  return !!(frame.tileUrlTemplate || frame.imageUrl || frame.imageDataUrl || frame.visualType === "none");
+}
+
+function normalizeProjectionStatus(value) {
+  const normalized = normalizeString(value);
+  return PROJECTION_STATUSES.has(normalized) ? normalized : "unavailable";
+}
+
+function normalizeMotionVector(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const dxPixelsPerMinute = finiteOrNull(value.dxPixelsPerMinute ?? value.dxPerMinute ?? value.dx);
+  const dyPixelsPerMinute = finiteOrNull(value.dyPixelsPerMinute ?? value.dyPerMinute ?? value.dy);
+  const bearingDegrees = finiteOrNull(value.bearingDegrees ?? value.bearing);
+  const speedKmh = finiteOrNull(value.speedKmh ?? value.speedKmH);
+
+  if (Number.isFinite(dxPixelsPerMinute) || Number.isFinite(dyPixelsPerMinute) || Number.isFinite(bearingDegrees) || Number.isFinite(speedKmh)) {
+    return {
+      dxPixelsPerMinute: Number.isFinite(dxPixelsPerMinute) ? dxPixelsPerMinute : null,
+      dyPixelsPerMinute: Number.isFinite(dyPixelsPerMinute) ? dyPixelsPerMinute : null,
+      bearingDegrees: Number.isFinite(bearingDegrees) ? bearingDegrees : null,
+      speedKmh: Number.isFinite(speedKmh) ? speedKmh : null
+    };
+  }
+
+  return null;
+}
+
+function buildProjectionFrameId(horizonMinutes, timestamp) {
+  const compactTimestamp = timestamp ? timestamp.replace(/[^0-9]/g, "").slice(0, 14) : "unknown-time";
+  return `extrapolated-wgr-${horizonMinutes || "unknown"}min-${compactTimestamp}`;
+}
+
+function addMinutes(timestamp, minutes) {
+  const date = parseDate(timestamp);
+  if (!date || !Number.isFinite(minutes)) {
+    return null;
+  }
+
+  return new Date(date.getTime() + minutes * 60_000).toISOString();
+}
+
+function isValidIsoDate(value) {
+  return !!parseDate(value);
+}
+
+function parseDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function normalizeConfidenceLabel(value) {
+  const normalized = normalizeString(value);
+  return CONFIDENCE_LABELS.has(normalized) ? normalized : null;
 }
 
 function deriveGlobalState(state, sourceStatus, contributions) {
@@ -482,8 +776,14 @@ function normalizeIntensity(value) {
 }
 
 function normalizeConfidence(value) {
-  const score = typeof value === "object" ? finiteOrNull(value.score) : finiteOrNull(value);
+  if (value && typeof value === "object") {
+    const score = finiteOrNull(value.score);
+    const label = normalizeConfidenceLabel(value.label) || confidenceLabel(score);
 
+    return { score, label };
+  }
+
+  const score = finiteOrNull(value);
   return {
     score,
     label: confidenceLabel(score)
