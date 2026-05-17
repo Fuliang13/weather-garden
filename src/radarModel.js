@@ -17,11 +17,22 @@ const SOURCE_ALIASES = {
   garden: "garden-state",
   "garden-state": "garden-state"
 };
+const SOURCE_LABELS = {
+  "meteofrance-radar": "Météo-France Radar",
+  rainviewer: "RainViewer",
+  "open-meteo-arome": "Open-Meteo AROME",
+  "met-norway": "MET Norway",
+  ecowitt: "Ecowitt",
+  "garden-state": "GardenState",
+  [WGR_SOURCE_ID]: "Weather Garden Radar"
+};
 const WGR_TIMELINE_KINDS = new Set(["observed", "current", "future"]);
 const WGR_PHASES = new Set(["observed", "predicted", "extrapolated", "aggregated", "uncertain", "unavailable"]);
 const WGR_STATES = new Set(["fresh", "stale", "degraded", "unavailable"]);
+const VISUAL_TYPES = new Set(["tile", "image", "image-overlay", "data-image", "none"]);
 const SENSITIVE_KEY_PATTERN = /(api|token|secret|key|authorization|header|cookie|signed|url|payload|raw|mac|imei)/i;
 const URL_PATTERN = /https?:\/\//i;
+const SENSITIVE_URL_PATTERN = /(token|apikey|api_key|bearer|authorization|signature|signed|secret|credential|password)/i;
 
 export function normalizeRadarFrame(frame = {}, options = {}) {
   const source = normalizeSourceId(frame.source || options.source || "unknown");
@@ -138,21 +149,43 @@ export function normalizeWgrSourceContribution(input = {}, options = {}) {
 export function normalizeWgrTimelineFrame(input = {}, options = {}) {
   const kind = normalizeTimelineKind(input.kind || options.kind);
   const phase = normalizeWgrPhase(input.phase || input.status || input.availability || options.phase);
-  const available = input.available === true || !["unavailable", "uncertain"].includes(phase);
+  const available = input.available === false ? false : !["unavailable", "uncertain"].includes(phase);
   const timestamp = normalizeIsoDate(input.timestamp || input.validityTime || input.frameTime);
+  const sourceId = normalizeSourceId(input.sourceId || input.frameSource || input.provider || firstSource(input.contributors || input.sources || input.sourcesUsed) || options.sourceId);
+  const ageMinutes = computeAgeMinutes(timestamp, options.now || input.now);
+  const freshness = normalizeWgrState(input.freshness || input.state)
+    || (available ? normalizeWgrState(classifyFreshness(ageMinutes, finiteOrNull(input.freshnessLimitMinutes) || DEFAULT_FRESHNESS_LIMIT_MINUTES)) || "degraded" : "unavailable");
+  const tileUrlTemplate = sanitizeVisualUrl(input.tileUrlTemplate);
+  const imageUrl = sanitizeVisualUrl(input.imageUrl);
+  const imageDataUrl = sanitizeImageDataUrl(input.imageDataUrl);
+  const bounds = normalizeBounds(input.bounds);
+  const visualType = normalizeVisualType(input.visualType, { tileUrlTemplate, imageUrl, imageDataUrl, bounds });
+  const contributors = normalizeSourceList(input.contributors || input.sources || input.sourcesUsed || (sourceId ? [sourceId] : []));
 
   return {
     type: "WgrTimelineFrame",
     source: WGR_SOURCE_ID,
+    id: normalizeString(input.id) || buildFrameId(sourceId, timestamp, kind),
+    sourceId,
+    sourceLabel: normalizeString(input.sourceLabel) || sourceLabel(sourceId),
     kind,
     phase,
     available,
     timestamp,
+    ageMinutes,
+    freshness,
+    visualType,
+    tileUrlTemplate,
+    imageUrl,
+    imageDataUrl,
+    bounds,
+    opacity: normalizeOpacity(input.opacity),
     label: normalizeString(input.label),
     reason: normalizeString(input.reason || input.explanation),
-    contributors: normalizeSourceList(input.contributors || input.sources || input.sourcesUsed),
+    contributors,
     derivedFrom: normalizeDerivedFrom(input.derivedFrom),
     confidence: normalizeConfidence(input.confidence),
+    diagnostics: sanitizePublicDiagnostics(input.diagnostics),
     publicSafe: true
   };
 }
@@ -163,6 +196,8 @@ export function buildWgrTimeline(input = {}, options = {}) {
   const currentFrame = input.currentFrame
     ? normalizeWgrTimelineFrame(input.currentFrame, { ...options, kind: "current", phase: "aggregated" })
     : buildCurrentTimelineFrame(observedFrames, futureFrames);
+  const playbackAvailable = input.playbackAvailable === true || (input.playbackAvailable !== false && observedFrames.filter((frame) => frame.available).length > 1);
+  const sources = normalizeSourceList(input.sources || observedFrames.map((frame) => frame.sourceId));
 
   return {
     type: "WgrTimeline",
@@ -170,6 +205,18 @@ export function buildWgrTimeline(input = {}, options = {}) {
     observedFrames,
     currentFrame,
     futureFrames,
+    frameCount: observedFrames.length,
+    playbackAvailable,
+    playbackReason: normalizeString(input.playbackReason) || buildPlaybackReason(observedFrames, playbackAvailable),
+    timeRange: buildTimeRange(observedFrames),
+    sources,
+    freshness: currentFrame?.freshness || (observedFrames.length ? "degraded" : "unavailable"),
+    diagnostics: sanitizePublicDiagnostics({
+      ...input.diagnostics,
+      frameCount: observedFrames.length,
+      playbackAvailable,
+      sources
+    }),
     frames: [...observedFrames, ...(currentFrame ? [currentFrame] : []), ...futureFrames]
       .filter(Boolean)
       .sort(compareTimestampLike),
@@ -277,6 +324,34 @@ function buildCurrentTimelineFrame(observedFrames, futureFrames) {
   return null;
 }
 
+function buildPlaybackReason(observedFrames, playbackAvailable) {
+  if (playbackAvailable) {
+    return "Plusieurs frames radar observées réelles disponibles.";
+  }
+
+  if (observedFrames.length === 1) {
+    return observedFrames[0].sourceId === "meteofrance-radar"
+      ? "Météo-France fournit une seule image observée dans ce refresh."
+      : "Une seule frame radar observée disponible ; playback désactivé.";
+  }
+
+  return "Aucune frame radar observée disponible.";
+}
+
+function buildTimeRange(frames) {
+  const timestamps = frames.map((frame) => frame.timestamp).filter(Boolean).sort();
+
+  return {
+    start: timestamps[0] || null,
+    end: timestamps[timestamps.length - 1] || null
+  };
+}
+
+function buildFrameId(sourceId, timestamp, kind) {
+  const compactTimestamp = timestamp ? timestamp.replace(/[^0-9]/g, "").slice(0, 14) : "unknown-time";
+  return [kind || "frame", sourceId || "unknown", compactTimestamp].join("-");
+}
+
 function normalizeTimelineFrames(frames, options) {
   if (!Array.isArray(frames)) {
     return [];
@@ -295,6 +370,10 @@ function normalizeWgrFinalLayer(input = {}, sourcesUsed = []) {
     kind: normalizeWgrPhase(input.kind || input.phase || "aggregated"),
     available: input.available !== false && sourcesUsed.length > 0,
     contributors: normalizeSourceList(input.contributors || sourcesUsed),
+    visualSourceId: normalizeSourceId(input.visualSourceId),
+    visualSourceLabel: normalizeString(input.visualSourceLabel) || sourceLabel(input.visualSourceId),
+    visualType: normalizeVisualType(input.visualType),
+    playbackAvailable: input.playbackAvailable === true,
     publicSafe: true
   };
 }
@@ -423,6 +502,63 @@ function normalizeQuality(value) {
   };
 }
 
+function normalizeVisualType(value, references = {}) {
+  const normalized = normalizeString(value);
+  if (VISUAL_TYPES.has(normalized)) {
+    return normalized;
+  }
+
+  if (references.tileUrlTemplate) {
+    return "tile";
+  }
+
+  if (references.imageDataUrl) {
+    return references.bounds ? "image-overlay" : "data-image";
+  }
+
+  if (references.imageUrl) {
+    return references.bounds ? "image-overlay" : "image";
+  }
+
+  return "none";
+}
+
+function sanitizeVisualUrl(value) {
+  const url = normalizeString(value);
+  if (!url) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || parsed.search || parsed.hash || SENSITIVE_URL_PATTERN.test(url)) {
+      return null;
+    }
+
+    return url;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function sanitizeImageDataUrl(value) {
+  const dataUrl = normalizeString(value);
+  if (!dataUrl || !/^data:image\/(png|jpeg|webp);base64,[a-z0-9+/=]+$/i.test(dataUrl)) {
+    return null;
+  }
+
+  return SENSITIVE_URL_PATTERN.test(dataUrl) ? null : dataUrl;
+}
+
+function normalizeOpacity(value) {
+  const number = finiteOrNull(value);
+  if (!Number.isFinite(number)) {
+    return null;
+  }
+
+  return Math.min(1, Math.max(0, number));
+}
+
 function normalizeBounds(bounds) {
   if (!Array.isArray(bounds) || bounds.length !== 2) {
     return null;
@@ -459,6 +595,15 @@ function normalizeSourceList(value) {
   }
 
   return [...new Set(value.map((item) => normalizeSourceId(item)).filter(Boolean))];
+}
+
+function firstSource(value) {
+  return Array.isArray(value) ? value.find(Boolean) : null;
+}
+
+function sourceLabel(sourceId) {
+  const normalized = normalizeSourceId(sourceId);
+  return normalized ? SOURCE_LABELS[normalized] || normalized : null;
 }
 
 function normalizeStringList(value) {

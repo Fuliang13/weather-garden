@@ -82,7 +82,7 @@ describe("weather scoring", () => {
 
     expect(status.wgr).toMatchObject({
       type: "RadarSynthesis",
-      state: "fallback_rainviewer",
+      state: "rainviewer_ok",
       observedRain: false,
       imminentRain: true,
       coherence: "model_ahead_of_observation",

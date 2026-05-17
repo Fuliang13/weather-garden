@@ -1,5 +1,4 @@
 import {
-  buildUnavailableFutureFrame,
   buildWgrTimeline,
   normalizeRadarSynthesis,
   normalizeWgrSourceContribution
@@ -43,6 +42,7 @@ export function buildWgrSynthesis({
     now
   });
   const globalState = pickWgrGlobalState({ nativeOk, rainViewerOk, sourceStatus, contributions, stationConfirmsRain, modelRain, rain });
+  const timeline = buildTimelineModel({ meteoFranceRadar, rainViewer, now });
   const explanations = buildExplanations({
     state,
     globalState,
@@ -81,9 +81,13 @@ export function buildWgrSynthesis({
         id: "wgr",
         source: "wgr",
         kind: "aggregated",
-        contributors: contributions.filter((item) => item.used).map((item) => item.id)
+        contributors: contributions.filter((item) => item.used).map((item) => item.id),
+        visualSourceId: timeline.currentFrame?.sourceId || null,
+        visualSourceLabel: timeline.currentFrame?.sourceLabel || null,
+        visualType: timeline.currentFrame?.visualType || "none",
+        playbackAvailable: timeline.playbackAvailable
       },
-      timeline: buildTimelineModel({ meteoFranceRadar, rainViewer, now }),
+      timeline,
       futureProjection: {
         horizonMinutes: 30,
         state: "unavailable",
@@ -182,6 +186,7 @@ function collectWgrContributions({ meteoFranceRadar, rainViewer, openMeteo, metN
 function buildTimelineModel({ meteoFranceRadar, rainViewer, now }) {
   const observedFrames = collectObservedTimelineFrames(meteoFranceRadar, rainViewer);
   const latestFrame = observedFrames[observedFrames.length - 1] || null;
+  const playbackAvailable = observedFrames.length > 1;
 
   return buildWgrTimeline({
     generatedAt: now,
@@ -197,32 +202,92 @@ function buildTimelineModel({ meteoFranceRadar, rainViewer, now }) {
       available: false,
       reason: "Aucune frame observée disponible pour construire la frame WGR actuelle."
     },
-    futureFrames: [buildUnavailableFutureFrame({ now, minutes: 30, reason: WGR_UNAVAILABLE_PROJECTION_REASON })],
-    explanation: "Sprint 1 fournit le contrat de timeline WGR sans générer de projection radar future."
+    futureFrames: [],
+    playbackAvailable,
+    playbackReason: buildObservedPlaybackReason(observedFrames, playbackAvailable),
+    explanation: "Sprint 2 expose uniquement la timeline radar observée WGR ; aucune frame future n'est générée."
   });
 }
 
 function collectObservedTimelineFrames(meteoFranceRadar, rainViewer) {
   return [
-    ...mapRadarFramesToWgrTimeline(meteoFranceRadar?.wgr?.frames, "meteofrance-radar", "meteofrance.wgr.frames"),
-    ...mapRadarFramesToWgrTimeline(rainViewer?.wgr?.frames, "rainviewer", "rainviewer.wgr.frames")
+    ...mapMeteoFranceFramesToWgrTimeline(meteoFranceRadar),
+    ...mapRainViewerFramesToWgrTimeline(rainViewer)
   ].sort((a, b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")));
 }
 
-function mapRadarFramesToWgrTimeline(frames, contributor, derivedFrom) {
+function mapRainViewerFramesToWgrTimeline(rainViewer) {
+  const rawFrames = Array.isArray(rainViewer?.frames) && rainViewer.frames.length > 0
+    ? rainViewer.frames
+    : rainViewer?.wgr?.frames;
+
+  return mapRadarFramesToWgrTimeline(rawFrames, {
+    sourceId: "rainviewer",
+    sourceLabel: "RainViewer",
+    derivedFrom: "rainviewer.frames",
+    visualType: "tile"
+  });
+}
+
+function mapMeteoFranceFramesToWgrTimeline(meteoFranceRadar) {
+  const rawFrames = Array.isArray(meteoFranceRadar?.frames) && meteoFranceRadar.frames.length > 0
+    ? meteoFranceRadar.frames
+    : meteoFranceRadar?.wgr?.frames;
+
+  return mapRadarFramesToWgrTimeline(rawFrames, {
+    sourceId: "meteofrance-radar",
+    sourceLabel: "Météo-France Radar",
+    derivedFrom: "meteofrance.frames",
+    visualType: "image-overlay"
+  });
+}
+
+function mapRadarFramesToWgrTimeline(frames, { sourceId, sourceLabel, derivedFrom, visualType }) {
   if (!Array.isArray(frames)) {
     return [];
   }
 
-  return frames.map((frame) => ({
+  return frames.map((frame) => {
+    const timestamp = frame.timestamp || frame.validityTime || frame.frameTime;
+    return {
     kind: "observed",
     phase: "observed",
     available: true,
-    timestamp: frame.timestamp,
-    contributors: [contributor],
+    id: frame.id,
+    sourceId,
+    sourceLabel,
+    timestamp,
+    tileUrlTemplate: frame.tileUrlTemplate,
+    imageUrl: frame.imageUrl,
+    imageDataUrl: frame.imageDataUrl,
+    bounds: frame.bounds,
+    opacity: frame.opacity,
+    visualType,
+    contributors: [sourceId],
     derivedFrom: [derivedFrom],
-    confidence: frame.confidence
-  })).filter((frame) => frame.timestamp);
+    confidence: frame.confidence,
+    diagnostics: {
+      provider: sourceId,
+      hasVisualReference: !!(frame.tileUrlTemplate || frame.imageUrl || frame.imageDataUrl)
+    }
+  };
+  }).filter((frame) => frame.timestamp);
+}
+
+function buildObservedPlaybackReason(observedFrames, playbackAvailable) {
+  if (playbackAvailable) {
+    return "Plusieurs frames radar observées réelles disponibles.";
+  }
+
+  if (observedFrames.length === 1 && observedFrames[0].sourceId === "meteofrance-radar") {
+    return "Météo-France fournit une seule image observée dans ce refresh.";
+  }
+
+  if (observedFrames.length === 1) {
+    return "Une seule frame radar observée disponible ; playback désactivé.";
+  }
+
+  return "Aucune frame radar observée disponible.";
 }
 
 function hasRadarRainAmount(meteoFranceRadar) {
@@ -288,7 +353,7 @@ function pickWgrState({ nativeOk, rainViewerOk, sourceStatus }) {
   }
 
   if (rainViewerOk) {
-    return "fallback_rainviewer";
+    return "rainviewer_ok";
   }
 
   if (sourceStatus.some((status) => status.freshness === "stale")) {
@@ -373,7 +438,6 @@ function collectConfidenceReasons({ nativeOk, rainViewerOk, stationConfirmsRain,
 
 function collectDegradationReasons({ state, globalState, sourceStatus, contributions, modelRain, stationConfirmsRain }) {
   return [
-    state === "fallback_rainviewer" ? "meteofrance_native_unavailable" : null,
     globalState === "degraded" ? "wgr_has_partial_source_context" : null,
     !modelRain ? "no_model_rain_used" : null,
     !stationConfirmsRain ? "no_fresh_station_rain_confirmation" : null,

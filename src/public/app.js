@@ -950,6 +950,7 @@ function getDiagnosticRadarSourceLabel(value) {
 function formatWgrState(value) {
   return {
     native_ok: "MF natif vérifié",
+    rainviewer_ok: "RainViewer vérifié",
     fallback_rainviewer: "Bascule RainViewer réelle",
     fresh: "Radar frais",
     stale: "Image ancienne",

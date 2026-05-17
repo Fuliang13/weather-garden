@@ -225,7 +225,7 @@ export function normalizeRainViewerRadarSequence({ fetchedAt, generatedAt = null
     ok,
     frames: frames.map((frame) => ({
       source: "rainviewer",
-      timestamp: frame?.time ? new Date(frame.time * 1000).toISOString() : generatedAt,
+      timestamp: frame?.timestamp || (frame?.time ? new Date(frame.time * 1000).toISOString() : generatedAt),
       fetchedAt,
       quality: { ok: true },
       origin: "rainviewer",
