@@ -1,6 +1,7 @@
 import {
   buildWgrFusion,
   buildWgrFutureProjection,
+  buildWgrNarrative,
   buildWgrTimeline,
   normalizeRadarSynthesis,
   normalizeWgrSourceContribution
@@ -56,6 +57,27 @@ export function buildWgrSynthesis({
     modelSignals: buildFusionModelSignals({ openMeteo, metNorway, now }),
     stationSignal: buildFusionStationSignal(ecowittObservation)
   });
+  const narrative = buildWgrNarrative({
+    generatedAt: now,
+    state,
+    globalState,
+    observedRain,
+    imminentRain,
+    intensity: {
+      level: rain?.intensityLevel || "unknown",
+      mmPerHour: rain?.intensityMmPerHour ?? null
+    },
+    confidence: confidenceScore,
+    confidenceReasons: collectConfidenceReasons({ nativeOk, rainViewerOk, stationConfirmsRain, modelRain, coherence }),
+    degradationReasons: collectDegradationReasons({ state, globalState, sourceStatus, contributions, modelRain, stationConfirmsRain }),
+    fusion,
+    timeline,
+    futureProjection,
+    contributions,
+    sourcesUsed: contributions.filter((item) => item.used).map((item) => item.id),
+    sourcesIgnored: contributions.filter((item) => item.ignored).map((item) => item.id),
+    rain
+  });
   const explanations = buildExplanations({
     state,
     globalState,
@@ -104,6 +126,7 @@ export function buildWgrSynthesis({
       timeline,
       futureProjection,
       fusion,
+      narrative,
       diagnostics: {
         globalState,
         radarStatusCount: sourceStatus.length,
@@ -113,7 +136,7 @@ export function buildWgrSynthesis({
       derivedFrom: collectDerivedFrom({ nativeOk, rainViewerOk, stationConfirmsRain, modelRain, rain }),
       explanations
     }),
-    headline: buildHeadline({ observedRain, imminentRain, rain, state }),
+    headline: narrative.headline,
     displayHints: buildDisplayHints({ nativeOk, rainViewerOk, rain })
   };
 }

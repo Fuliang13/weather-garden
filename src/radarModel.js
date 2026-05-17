@@ -43,6 +43,8 @@ const WGR_FUSION_HORIZONS = [
 ];
 const FUSION_RAIN_THRESHOLD_MM = 0.1;
 const FUSION_RAIN_PROBABILITY_THRESHOLD = 0.35;
+const NARRATIVE_LOCALE = "fr-FR";
+const NARRATIVE_TECHNICAL_PATTERN = /\b(nativeLayer|fallbackReason|HDF5|token|apikey|api_key|authorization|bearer|payload|score:|https?:\/\/)\b/i;
 const SENSITIVE_KEY_PATTERN = /(api|token|secret|key|authorization|header|cookie|signed|url|payload|raw|mac|imei)/i;
 const URL_PATTERN = /https?:\/\//i;
 const SENSITIVE_URL_PATTERN = /(token|apikey|api_key|bearer|authorization|signature|signed|secret|credential|password)/i;
@@ -255,41 +257,141 @@ export function buildUnavailableFutureFrame({ now = new Date(), minutes = 30, re
 }
 
 export function normalizeRadarSynthesis(input = {}) {
+  const generatedAt = normalizeIsoDate(input.generatedAt) || new Date(0).toISOString();
   const contributions = Array.isArray(input.contributions)
-    ? input.contributions.map((item) => normalizeWgrSourceContribution(item, { now: input.generatedAt }))
+    ? input.contributions.map((item) => normalizeWgrSourceContribution(item, { now: generatedAt }))
     : [];
   const sourcesUsed = normalizeSourceList(input.sourcesUsed || contributions.filter((item) => item.used).map((item) => item.id));
   const sourcesIgnored = normalizeSourceList(input.sourcesIgnored || contributions.filter((item) => item.ignored).map((item) => item.id));
   const globalState = normalizeWgrState(input.globalState) || deriveGlobalState(input.state, input.sourceStatus, contributions);
+  const timeline = buildWgrTimeline(input.timeline || {}, { generatedAt });
+  const futureProjection = normalizeFutureProjection(input.futureProjection, { generatedAt });
+  const fusion = normalizeWgrFusion(input.fusion, { generatedAt });
+  const confidence = normalizeConfidence(input.confidence);
+  const confidenceReasons = normalizeStringList(input.confidenceReasons);
+  const degradationReasons = normalizeStringList(input.degradationReasons);
+  const sourceStatus = Array.isArray(input.sourceStatus) ? input.sourceStatus.map((status) => normalizeRadarSourceStatus(status)) : [];
+  const narrative = normalizeWgrNarrative(input.narrative || buildWgrNarrative({
+    generatedAt,
+    state: input.state,
+    globalState,
+    observedRain: input.observedRain,
+    imminentRain: input.imminentRain,
+    intensity: input.intensity,
+    confidence,
+    confidenceReasons,
+    degradationReasons,
+    fusion,
+    timeline,
+    futureProjection,
+    contributions,
+    sourcesUsed,
+    sourcesIgnored
+  }), { generatedAt });
 
   return {
     type: "RadarSynthesis",
     mode: "WGR",
     source: WGR_SOURCE_ID,
-    generatedAt: normalizeIsoDate(input.generatedAt) || new Date(0).toISOString(),
+    generatedAt,
     state: normalizeString(input.state || "unavailable"),
     globalState,
     observedRain: input.observedRain === true,
     imminentRain: input.imminentRain === true,
     etaMinutes: finiteOrNull(input.etaMinutes),
     intensity: normalizeIntensity(input.intensity),
-    confidence: normalizeConfidence(input.confidence),
-    confidenceReasons: normalizeStringList(input.confidenceReasons),
-    degradationReasons: normalizeStringList(input.degradationReasons),
+    confidence,
+    confidenceReasons,
+    degradationReasons,
     coherence: normalizeString(input.coherence || "unknown"),
-    sourceStatus: Array.isArray(input.sourceStatus) ? input.sourceStatus.map((status) => normalizeRadarSourceStatus(status)) : [],
+    sourceStatus,
     contributions,
     sourcesUsed,
     sourcesIgnored,
     finalLayer: normalizeWgrFinalLayer(input.finalLayer, sourcesUsed),
-    timeline: buildWgrTimeline(input.timeline || {}, { generatedAt: input.generatedAt }),
-    futureProjection: normalizeFutureProjection(input.futureProjection, { generatedAt: input.generatedAt }),
-    fusion: normalizeWgrFusion(input.fusion, { generatedAt: input.generatedAt }),
+    timeline,
+    futureProjection,
+    fusion,
+    narrative,
+    headline: normalizeString(input.headline) || narrative.headline,
     diagnostics: sanitizePublicDiagnostics(input.diagnostics || buildPublicDiagnostics({ globalState, sourcesUsed, sourcesIgnored })),
     derivedFrom: normalizeDerivedFrom(input.derivedFrom),
     explanations: normalizeStringList(input.explanations),
     publicSafe: true
   };
+}
+
+export function buildWgrNarrative({
+  generatedAt = new Date(),
+  state = null,
+  globalState = null,
+  observedRain = false,
+  imminentRain = false,
+  intensity = null,
+  confidence = null,
+  confidenceReasons = [],
+  degradationReasons = [],
+  fusion = null,
+  timeline = null,
+  futureProjection = null,
+  contributions = [],
+  sourcesUsed = [],
+  sourcesIgnored = [],
+  rain = null
+} = {}) {
+  const generatedIso = normalizeIsoDate(generatedAt) || new Date(0).toISOString();
+  const normalizedFusion = normalizeWgrFusion(fusion || {}, { generatedAt: generatedIso });
+  const normalizedTimeline = timeline?.type === "WgrTimeline" ? timeline : buildWgrTimeline(timeline || {}, { generatedAt: generatedIso });
+  const projection = normalizeFutureProjection(futureProjection || {}, { generatedAt: generatedIso });
+  const normalizedContributions = Array.isArray(contributions)
+    ? contributions.map((item) => item?.type === "WgrSourceContribution" ? item : normalizeWgrSourceContribution(item, { now: generatedIso }))
+    : [];
+  const signals = collectNarrativeSignals({
+    generatedAt: generatedIso,
+    state,
+    globalState,
+    observedRain,
+    imminentRain,
+    intensity,
+    confidence,
+    confidenceReasons,
+    degradationReasons,
+    fusion: normalizedFusion,
+    timeline: normalizedTimeline,
+    futureProjection: projection,
+    contributions: normalizedContributions,
+    sourcesUsed,
+    sourcesIgnored,
+    rain
+  });
+  const scenario = pickNarrativeScenario(signals);
+  const text = buildNarrativeText(signals, scenario);
+  const available = scenario !== "unavailable";
+
+  return normalizeWgrNarrative({
+    available,
+    status: available ? signals.degraded ? "degraded" : "available" : "unavailable",
+    generatedAt: generatedIso,
+    locale: NARRATIVE_LOCALE,
+    scenario,
+    severity: signals.degraded || signals.divergent ? "watch" : "info",
+    headline: text.headline,
+    details: text.details,
+    advice: text.advice,
+    confidenceText: text.confidenceText,
+    limitText: text.limitText,
+    sourceSummary: text.sourceSummary,
+    timeSummary: text.timeSummary,
+    tags: buildNarrativeTags(signals, scenario),
+    evidence: buildNarrativeEvidence(signals),
+    diagnostics: {
+      scenario,
+      disagreementCount: signals.disagreements.length,
+      sourceCount: signals.allSources.length,
+      staleSourceCount: signals.staleSources.length,
+      publicSafe: true
+    }
+  }, { generatedAt: generatedIso });
 }
 
 export function classifyFreshness(ageMinutes, limitMinutes = DEFAULT_FRESHNESS_LIMIT_MINUTES) {
@@ -1122,6 +1224,535 @@ function normalizeFusionDisagreements(disagreements) {
     sources: normalizeSourceList(item.sources),
     reason: normalizeString(item.reason)
   })).filter((item) => item.type);
+}
+
+function normalizeWgrNarrative(input = {}, options = {}) {
+  const generatedAt = normalizeIsoDate(input.generatedAt || options.generatedAt) || new Date(0).toISOString();
+  const available = input.available === true;
+  const status = normalizeString(input.status || input.state) || (available ? "available" : "unavailable");
+  const scenario = normalizeString(input.scenario) || (available ? "degraded" : "unavailable");
+
+  return {
+    type: "WgrNarrative",
+    available,
+    status,
+    state: status,
+    generatedAt,
+    locale: normalizeString(input.locale) || NARRATIVE_LOCALE,
+    scenario,
+    severity: normalizeNarrativeSeverity(input.severity),
+    headline: sanitizeNarrativeText(input.headline) || "Analyse radar indisponible.",
+    details: sanitizeNarrativeText(input.details) || "Les sources disponibles ne permettent pas une lecture locale fiable.",
+    advice: sanitizeNarrativeText(input.advice) || "Surveille la situation avant toute intervention extérieure.",
+    confidenceText: sanitizeNarrativeText(input.confidenceText) || "Confiance indisponible : sources insuffisantes.",
+    limitText: sanitizeNarrativeText(input.limitText) || "La limite principale est l’absence de source exploitable.",
+    sourceSummary: sanitizeNarrativeText(input.sourceSummary) || "Source radar utilisée : aucune.",
+    timeSummary: sanitizeNarrativeText(input.timeSummary) || "Aucune image radar exploitable.",
+    tags: normalizeStringList(input.tags),
+    evidence: normalizeNarrativeEvidence(input.evidence),
+    diagnostics: sanitizePublicDiagnostics(input.diagnostics),
+    publicSafe: true
+  };
+}
+
+function collectNarrativeSignals({ generatedAt, state, globalState, observedRain, imminentRain, intensity, confidence, confidenceReasons, degradationReasons, fusion, timeline, futureProjection, contributions, sourcesUsed, sourcesIgnored, rain }) {
+  const horizons = Array.isArray(fusion.horizons) ? fusion.horizons : [];
+  const nowHorizon = horizons.find((horizon) => horizon.horizonMinutes === 0) || null;
+  const futureHorizons = horizons.filter((horizon) => horizon.horizonMinutes > 0);
+  const radar = fusion.radarSignal || {};
+  const modelSummary = fusion.modelSignal || {};
+  const modelSources = Array.isArray(modelSummary.sources) ? modelSummary.sources : [];
+  const station = fusion.stationSignal || {};
+  const currentFrame = timeline?.currentFrame || null;
+  const projection = futureProjection || {};
+  const allSources = normalizeSourceList([
+    ...(Array.isArray(sourcesUsed) ? sourcesUsed : []),
+    ...(Array.isArray(sourcesIgnored) ? sourcesIgnored : []),
+    ...(fusion.sourcesUsed || []),
+    ...(fusion.sourcesIgnored || []),
+    ...contributions.map((item) => item.id)
+  ]);
+  const staleSources = normalizeSourceList([
+    ...contributions.filter((item) => item.freshness === "stale" || item.state === "stale").map((item) => item.id),
+    radar.freshness === "stale" ? radar.sourceId : null,
+    station.freshness === "stale" ? "ecowitt" : null,
+    ...modelSources.filter((item) => item.freshness === "stale").map((item) => item.sourceId)
+  ]);
+  const radarRain = radar.rainLikely === true;
+  const stationFresh = station.available === true && station.freshness === "fresh";
+  const stationRain = stationFresh && station.rainLikely === true;
+  const modelRain = modelSources.some((model) => model.available && model.freshness !== "unavailable" && (model.horizons || []).some((horizon) => horizon.available && horizon.rainLikely));
+  const modelDry = modelSources.some((model) => model.available && model.freshness !== "unavailable") && !modelRain;
+  const futureRain = futureHorizons.some((horizon) => horizon.available && horizon.rainLikely);
+  const localRainNow = fusion.localRainSignal?.rainLikelyNow === true || nowHorizon?.rainLikely === true || radarRain || stationRain || observedRain === true;
+  const disagreements = Array.isArray(fusion.disagreements) ? fusion.disagreements : [];
+  const confidenceObject = normalizeConfidence(fusion.confidence?.label ? fusion.confidence : confidence);
+  const confidenceLabelValue = normalizeConfidenceLabel(confidenceObject.label) || "unknown";
+  const sourceDominant = pickNarrativeDominantSource({ nowHorizon, futureHorizons, radar, modelSources, station });
+  const intensityObject = pickNarrativeIntensity({ nowHorizon, futureHorizons, radar, station, intensity });
+  const etaMinutes = pickNarrativeEta({ rain, futureHorizons, projection });
+  const direction = pickNarrativeDirection({ rain, projection });
+  const degraded = fusion.status === "degraded" || globalState === "stale" || globalState === "degraded" || staleSources.length > 0 || (fusion.degradationReasons || []).length > 0 || (Array.isArray(degradationReasons) && degradationReasons.length > 0);
+
+  return {
+    generatedAt,
+    state: normalizeString(state),
+    globalState: normalizeString(globalState),
+    fusion,
+    timeline,
+    futureProjection: projection,
+    currentFrame,
+    nowHorizon,
+    futureHorizons,
+    radar,
+    modelSources,
+    station,
+    localRainNow,
+    imminentRain: imminentRain === true || futureRain,
+    radarRain,
+    stationRain,
+    stationFresh,
+    modelRain,
+    modelDry,
+    futureRain,
+    projectionAvailable: projection.available === true,
+    disagreements,
+    divergent: disagreements.length > 0,
+    degraded,
+    confidence: confidenceObject,
+    confidenceReasons: normalizeStringList([...(fusion.confidenceReasons || []), ...(Array.isArray(confidenceReasons) ? confidenceReasons : [])]),
+    degradationReasons: normalizeStringList([...(fusion.degradationReasons || []), ...(Array.isArray(degradationReasons) ? degradationReasons : [])]),
+    sourceDominant,
+    intensity: intensityObject,
+    etaMinutes,
+    direction,
+    allSources,
+    staleSources,
+    sourcesUsed: normalizeSourceList([...(fusion.sourcesUsed || []), ...(Array.isArray(sourcesUsed) ? sourcesUsed : [])]),
+    sourcesIgnored: normalizeSourceList([...(fusion.sourcesIgnored || []), ...(Array.isArray(sourcesIgnored) ? sourcesIgnored : [])]),
+    contributions,
+    confidenceLabel: confidenceLabelValue
+  };
+}
+
+function pickNarrativeScenario(signals) {
+  if (!signals.fusion.available && !signals.sourcesUsed.length && !signals.localRainNow && !signals.imminentRain) {
+    return "unavailable";
+  }
+
+  if (signals.radarRain && signals.modelDry) {
+    return "radar-rain-model-dry";
+  }
+
+  if (signals.divergent && !signals.radarRain) {
+    return "sources-diverge";
+  }
+
+  if (signals.projectionAvailable && signals.futureRain && !signals.localRainNow) {
+    return "rain-approaching";
+  }
+
+  if (signals.localRainNow) {
+    return "observed-rain";
+  }
+
+  if (signals.modelRain && !signals.radarRain && !signals.stationRain) {
+    return "model-rain-only";
+  }
+
+  if (signals.imminentRain || signals.futureRain) {
+    return "imminent-rain";
+  }
+
+  if (signals.degraded) {
+    return "degraded";
+  }
+
+  if (signals.sourcesUsed.length > 1 && !signals.divergent) {
+    return "sources-agree";
+  }
+
+  return "no-rain-nearby";
+}
+
+function buildNarrativeText(signals, scenario) {
+  const intensityText = narrativeIntensityText(signals.intensity);
+  const sourceSummary = buildNarrativeSourceSummary(signals);
+  const timeSummary = buildNarrativeTimeSummary(signals);
+  const confidenceText = buildNarrativeConfidenceText(signals);
+  const limitText = buildNarrativeLimitText(signals);
+
+  if (scenario === "unavailable") {
+    return {
+      headline: "Radar indisponible pour le moment.",
+      details: "Aucune source exploitable ne permet de lire la pluie près du jardin pour le moment.",
+      advice: "Surveille la situation avant toute intervention extérieure.",
+      confidenceText,
+      limitText,
+      sourceSummary,
+      timeSummary
+    };
+  }
+
+  if (scenario === "radar-rain-model-dry") {
+    return {
+      headline: `${capitalizeSentence(intensityText || "Activité pluvieuse")} observée près du jardin.`,
+      details: "Le radar signale de la pluie, mais les modèles ne la confirment pas clairement.",
+      advice: "Surveille les zones sensibles si l’épisode se renforce.",
+      confidenceText,
+      limitText,
+      sourceSummary,
+      timeSummary
+    };
+  }
+
+  if (scenario === "sources-diverge") {
+    return {
+      headline: "Sources météo divergentes.",
+      details: "Les sources disponibles ne donnent pas exactement la même lecture de la pluie locale.",
+      advice: "Surveille la situation avant toute intervention extérieure.",
+      confidenceText,
+      limitText,
+      sourceSummary,
+      timeSummary
+    };
+  }
+
+  if (scenario === "rain-approaching") {
+    return {
+      headline: "Pluie probable à courte échéance.",
+      details: buildFutureRainDetails(signals),
+      advice: "Surveille les zones sensibles si l’épisode se confirme.",
+      confidenceText,
+      limitText,
+      sourceSummary,
+      timeSummary
+    };
+  }
+
+  if (scenario === "observed-rain") {
+    return {
+      headline: `${capitalizeSentence(intensityText || "Activité pluvieuse")} observée près du jardin.`,
+      details: buildObservedRainDetails(signals),
+      advice: "Surveille les zones sensibles si l’épisode se renforce.",
+      confidenceText,
+      limitText,
+      sourceSummary,
+      timeSummary
+    };
+  }
+
+  if (scenario === "model-rain-only") {
+    return {
+      headline: Number.isFinite(signals.etaMinutes) ? `${capitalizeSentence(intensityText || "Pluie")} probable dans ~${Math.round(signals.etaMinutes)} min.` : "Pluie possible selon les modèles.",
+      details: "Les modèles indiquent un risque de pluie, mais le radar ou la station locale ne le confirment pas actuellement.",
+      advice: "Surveille la situation avant toute intervention extérieure.",
+      confidenceText,
+      limitText,
+      sourceSummary,
+      timeSummary
+    };
+  }
+
+  if (scenario === "imminent-rain") {
+    return {
+      headline: Number.isFinite(signals.etaMinutes) ? `${capitalizeSentence(intensityText || "Pluie")} probable dans ~${Math.round(signals.etaMinutes)} min.` : "Pluie possible dans la fenêtre proche.",
+      details: buildFutureRainDetails(signals),
+      advice: "Prévois de vérifier le potager après le passage de la pluie.",
+      confidenceText,
+      limitText,
+      sourceSummary,
+      timeSummary
+    };
+  }
+
+  if (scenario === "degraded") {
+    return {
+      headline: "Lecture pluie dégradée.",
+      details: "Certaines sources sont anciennes, partielles ou indisponibles.",
+      advice: "Surveille la situation avant toute intervention extérieure.",
+      confidenceText,
+      limitText,
+      sourceSummary,
+      timeSummary
+    };
+  }
+
+  if (scenario === "sources-agree") {
+    return {
+      headline: "Sources météo cohérentes.",
+      details: "Les sources disponibles donnent une lecture cohérente de la situation locale.",
+      advice: "Pas d’action particulière pour le moment.",
+      confidenceText,
+      limitText,
+      sourceSummary,
+      timeSummary
+    };
+  }
+
+  return {
+    headline: "Aucune pluie proche détectée.",
+    details: "Les sources disponibles ne signalent pas de pluie autour du jardin pour le moment.",
+    advice: "Pas d’action particulière pour le moment.",
+    confidenceText,
+    limitText,
+    sourceSummary,
+    timeSummary
+  };
+}
+
+function buildObservedRainDetails(signals) {
+  const details = [];
+  if (signals.radarRain) {
+    details.push("Le radar indique une activité pluvieuse.");
+  }
+  if (signals.stationRain) {
+    details.push("La station locale confirme de la pluie sur place.");
+  } else if (signals.stationFresh && signals.station.humidityPct >= 85) {
+    details.push("La station locale indique une humidité élevée.");
+  }
+  if (signals.modelRain && !signals.divergent) {
+    details.push("Les modèles restent cohérents avec cet épisode.");
+  }
+  return details.join(" ") || "Une activité pluvieuse est observée par les sources disponibles.";
+}
+
+function buildFutureRainDetails(signals) {
+  const horizon = signals.futureHorizons.find((item) => item.rainLikely && item.available);
+  const pieces = [];
+  if (horizon) {
+    pieces.push(`Le signal pluie apparaît sur l’horizon ${horizon.key}.`);
+  }
+  if (Number.isFinite(signals.etaMinutes)) {
+    pieces.push(`L’arrivée estimée provient d’une source déjà disponible : environ ${Math.round(signals.etaMinutes)} minutes.`);
+  }
+  if (signals.direction) {
+    pieces.push(`Direction indiquée par la source : ${signals.direction}.`);
+  }
+  if (signals.projectionAvailable) {
+    pieces.push("La projection radar courte échéance est disponible.");
+  }
+  return pieces.join(" ") || "Une source de prévision indique une pluie possible à courte échéance.";
+}
+
+function buildNarrativeConfidenceText(signals) {
+  const prefix = {
+    high: "Confiance forte",
+    medium: "Confiance moyenne",
+    low: "Confiance faible",
+    unknown: "Confiance limitée",
+    unavailable: "Confiance indisponible"
+  }[signals.confidenceLabel] || "Confiance limitée";
+  const reasons = [];
+
+  if (signals.divergent) {
+    reasons.push("sources divergentes");
+  }
+  if (signals.radar.available && signals.radar.freshness === "fresh") {
+    reasons.push("radar frais");
+  }
+  if (signals.modelRain) {
+    reasons.push("modèles utiles");
+  }
+  if (signals.stationRain) {
+    reasons.push("station locale fraîche");
+  } else if (signals.staleSources.includes("ecowitt")) {
+    reasons.push("station locale ancienne");
+  }
+  if (!reasons.length && signals.degraded) {
+    reasons.push("données partielles");
+  }
+
+  return `${prefix}${reasons.length ? ` : ${reasons.join(", ")}.` : "."}`;
+}
+
+function buildNarrativeLimitText(signals) {
+  if (signals.divergent) {
+    return "Les sources ne sont pas totalement cohérentes ; la lecture doit rester prudente.";
+  }
+  if (signals.sourcesIgnored.includes("meteofrance-radar")) {
+    return "Météo-France n’est pas exploitable dans cette synthèse.";
+  }
+  if (signals.futureProjection.available !== true) {
+    return "La projection +30 min reste indisponible ou incertaine.";
+  }
+  if (signals.staleSources.length) {
+    return "Certaines données sont anciennes et limitent la confiance.";
+  }
+  return "Aucune limite majeure supplémentaire dans les sources utilisées.";
+}
+
+function buildNarrativeSourceSummary(signals) {
+  if (signals.radar.available && signals.radar.sourceId) {
+    return `Source radar utilisée : ${sourceLabel(signals.radar.sourceId)}.`;
+  }
+  if (signals.currentFrame?.sourceId) {
+    return `Source radar utilisée : ${sourceLabel(signals.currentFrame.sourceId)}.`;
+  }
+  if (signals.sourcesUsed.includes("open-meteo-arome") || signals.sourcesUsed.includes("met-norway")) {
+    return "Source principale utilisée : modèles météo.";
+  }
+  return "Source radar utilisée : aucune.";
+}
+
+function buildNarrativeTimeSummary(signals) {
+  const freshness = signals.currentFrame?.freshness || signals.radar.freshness;
+  if (freshness === "fresh") {
+    return "Image radar fraîche.";
+  }
+  if (freshness === "stale") {
+    return "Image radar ancienne.";
+  }
+  if (signals.futureProjection.available) {
+    return "Projection courte échéance disponible.";
+  }
+  return "Aucune image radar exploitable.";
+}
+
+function buildNarrativeTags(signals, scenario) {
+  return normalizeStringList([
+    scenario,
+    signals.localRainNow ? "rain-observed" : null,
+    signals.futureRain ? "rain-soon" : null,
+    signals.confidenceLabel ? `${signals.confidenceLabel}-confidence` : null,
+    signals.divergent ? "sources-diverge" : null,
+    signals.degraded ? "degraded" : null,
+    signals.radar.sourceId === "rainviewer" ? "rainviewer-normal-source" : null,
+    signals.stationRain ? "station-confirms" : null
+  ]);
+}
+
+function buildNarrativeEvidence(signals) {
+  return [
+    signals.radar.available ? {
+      type: "radar",
+      sourceId: signals.radar.sourceId,
+      label: sourceLabel(signals.radar.sourceId),
+      rainLikely: signals.radar.rainLikely === true,
+      freshness: signals.radar.freshness
+    } : null,
+    signals.modelRain ? {
+      type: "model",
+      sourceId: "open-meteo-arome",
+      label: sourceLabel("open-meteo-arome"),
+      rainLikely: true
+    } : null,
+    signals.station.available ? {
+      type: "station",
+      sourceId: "ecowitt",
+      label: sourceLabel("ecowitt"),
+      rainLikely: signals.station.rainLikely === true,
+      freshness: signals.station.freshness
+    } : null,
+    signals.futureProjection.available ? {
+      type: "projection",
+      sourceId: WGR_SOURCE_ID,
+      label: sourceLabel(WGR_SOURCE_ID),
+      horizons: signals.futureProjection.frames.map((frame) => frame.horizonMinutes).filter(Boolean)
+    } : null
+  ].filter(Boolean);
+}
+
+function normalizeNarrativeEvidence(evidence) {
+  if (!Array.isArray(evidence)) {
+    return [];
+  }
+
+  return evidence.map((item) => sanitizePublicDiagnostics(item)).filter((item) => Object.keys(item).length > 0);
+}
+
+function pickNarrativeDominantSource({ nowHorizon, futureHorizons, radar, modelSources, station }) {
+  const explicitSource = nowHorizon?.sourceDominant || futureHorizons.find((item) => item.sourceDominant)?.sourceDominant;
+  if (explicitSource) {
+    return normalizeSourceId(explicitSource);
+  }
+  if (radar.available) {
+    return radar.sourceId;
+  }
+  if (station.available && station.freshness === "fresh") {
+    return "ecowitt";
+  }
+  return modelSources.find((item) => item.available)?.sourceId || null;
+}
+
+function pickNarrativeIntensity({ nowHorizon, futureHorizons, radar, station, intensity }) {
+  const explicitIntensity = normalizeIntensity(intensity);
+  const horizonIntensity = isUsefulNarrativeIntensity(nowHorizon?.intensity) ? nowHorizon.intensity : null;
+  const futureIntensity = futureHorizons.find((item) => isUsefulNarrativeIntensity(item.intensity))?.intensity || null;
+  if (isUsefulNarrativeIntensity(explicitIntensity)) {
+    return explicitIntensity;
+  }
+  if (horizonIntensity) {
+    return horizonIntensity;
+  }
+  if (futureIntensity) {
+    return futureIntensity;
+  }
+  if (station.rainLikely && Number.isFinite(station.rainRateMmPerHour)) {
+    return { level: intensityLevelFromMm(station.rainRateMmPerHour), mmPerHour: station.rainRateMmPerHour };
+  }
+  return explicitIntensity;
+}
+
+function isUsefulNarrativeIntensity(intensity) {
+  const level = normalizeString(intensity?.level);
+  return !!level && !["unknown", "none"].includes(level);
+}
+
+function pickNarrativeEta({ rain, futureHorizons, projection }) {
+  const explicitEta = finiteOrNull(rain?.etaMinutes);
+  if (Number.isFinite(explicitEta)) {
+    return explicitEta;
+  }
+  const confidentHorizon = futureHorizons.find((horizon) => horizon.rainLikely && ["high", "medium"].includes(horizon.confidence?.label));
+  if (confidentHorizon && projection.available === true) {
+    return confidentHorizon.horizonMinutes;
+  }
+  return null;
+}
+
+function pickNarrativeDirection({ rain, projection }) {
+  const explicitDirection = normalizeString(rain?.directionLabel || rain?.direction);
+  if (explicitDirection) {
+    return explicitDirection;
+  }
+  const vector = projection.frames?.find((frame) => frame.motionVector)?.motionVector || null;
+  if (Number.isFinite(vector?.bearingDegrees)) {
+    return `${Math.round(vector.bearingDegrees)}°`;
+  }
+  return null;
+}
+
+function narrativeIntensityText(intensity) {
+  const level = normalizeString(intensity?.level);
+  if (level === "light") {
+    return "pluie faible";
+  }
+  if (level === "moderate") {
+    return "pluie modérée";
+  }
+  if (level === "heavy") {
+    return "pluie forte";
+  }
+  return null;
+}
+
+function normalizeNarrativeSeverity(value) {
+  const normalized = normalizeString(value);
+  return ["info", "watch", "risk", "urgent"].includes(normalized) ? normalized : "info";
+}
+
+function sanitizeNarrativeText(value) {
+  const text = normalizeString(value);
+  if (!text || NARRATIVE_TECHNICAL_PATTERN.test(text)) {
+    return null;
+  }
+  return text;
+}
+
+function capitalizeSentence(value) {
+  const text = normalizeString(value);
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
 }
 
 function normalizeFutureProjection(input = {}, options = {}) {
