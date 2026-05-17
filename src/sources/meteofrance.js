@@ -14,13 +14,13 @@ const METEOFRANCE_NATIVE_RASTER_MAX_SIZE = 1024;
 const METEOFRANCE_TOKEN_USER_AGENT_FALLBACK = "weather-garden/0.1";
 const METEOFRANCE_REQUIRED_SECRETS = ["METEOFRANCE_API_KEY", "METEOFRANCE_APPLICATION_ID"];
 export const METEOFRANCE_RAIN_PALETTE = [
-  { min: 20, rgba: [178, 48, 78, 188] },
-  { min: 10, rgba: [158, 70, 172, 178] },
-  { min: 5, rgba: [124, 92, 196, 166] },
-  { min: 2, rgba: [58, 108, 205, 154] },
-  { min: 1, rgba: [44, 135, 214, 138] },
-  { min: 0.2, rgba: [82, 174, 222, 112] },
-  { min: 0, rgba: [142, 210, 232, 76] }
+  { min: 20, rgba: [190, 44, 58, 190] },
+  { min: 10, rgba: [168, 62, 150, 178] },
+  { min: 5, rgba: [126, 76, 186, 166] },
+  { min: 2, rgba: [48, 104, 196, 154] },
+  { min: 1, rgba: [38, 132, 204, 138] },
+  { min: 0.2, rgba: [86, 178, 222, 118] },
+  { min: 0.05, rgba: [150, 218, 236, 88] }
 ];
 
 export const METEOFRANCE_RADAR_FRAME_LIMIT = 24;
@@ -40,9 +40,19 @@ export async function fetchMeteoFranceRadar({ env }) {
   const fetchBinary = authMode === "api-key"
     ? (url) => fetchMeteoFranceBinaryWithApiKey(env, url)
     : (url) => fetchMeteoFranceBinaryWithOAuth(env, url, tokenState);
-  const radarMetadata = await fetchMeteoFranceRadarMetadata(fetchJson);
 
-  return buildMeteoFranceRadarResponse({ env, fetchedAt, authMode, radarMetadata, fetchBinary });
+  try {
+    const radarMetadata = await fetchMeteoFranceRadarMetadata(fetchJson);
+    return buildMeteoFranceRadarResponse({ env, fetchedAt, authMode, radarMetadata, fetchBinary });
+  } catch (error) {
+    return buildMeteoFranceDebugErrorResponse({
+      fetchedAt,
+      authMode,
+      tokenOk: authMode === "oauth2" ? !!tokenState.accessToken : null,
+      message: error.message,
+      env
+    });
+  }
 }
 
 export async function debugMeteoFranceRadar({ env }) {
@@ -159,7 +169,7 @@ export async function fetchRainViewerRadar({ latitude, longitude, enabled = true
       enabled: false,
       source: "rainviewer",
       fetchedAt,
-      message: "RainViewer fallback disabled.",
+      message: "RainViewer disabled.",
       wgr: normalizeRainViewerRadarSequence({ fetchedAt, ok: false, frames: [] })
     };
   }
@@ -274,6 +284,7 @@ async function buildMeteoFranceRadarResponse({ env, fetchedAt, authMode, radarMe
       configured: true,
       authMode,
       catalogEndpoint: METEOFRANCE_RADAR_CATALOG_URL,
+      catalogOk: true,
       zoneEndpoint: sanitizePublicUrl(zoneUrl),
       observationsEndpoint: sanitizePublicUrl(observationsUrl),
       observationEndpoint: sanitizePublicUrl(observationUrl),
@@ -542,6 +553,7 @@ function buildMeteoFranceNativeLayer(hdf5Diagnostics, validityTime = null) {
     };
   }
 
+  const frameValidityTime = normalizeIsoDate(validityTime) || normalizeIsoDate(hdf5Diagnostics.validityTime) || null;
   const frame = {
     provider: "meteofrance-radar",
     imageDataUrl,
@@ -550,7 +562,7 @@ function buildMeteoFranceNativeLayer(hdf5Diagnostics, validityTime = null) {
     height: raster.height,
     sourceWidth: raster.sourceWidth,
     sourceHeight: raster.sourceHeight,
-    validityTime: normalizeIsoDate(validityTime) || null,
+    validityTime: frameValidityTime,
     attribution: "Météo-France"
   };
 
@@ -575,7 +587,10 @@ function sanitizeMeteoFranceHdf5Diagnostics(diagnostics) {
   }
 
   const { nativeLayerImageDataUrl, ...publicDiagnostics } = diagnostics;
-  return publicDiagnostics;
+  return {
+    ...publicDiagnostics,
+    nativeLayerImageDataUrlAvailable: !!nativeLayerImageDataUrl
+  };
 }
 
 function buildMeteoFranceRadarMessage({ hasPrimaryProduct, hasFallbackProduct, hdf5Diagnostics, nativeLayer }) {
@@ -656,12 +671,19 @@ function buildMeteoFranceMissingConfigResponse(fetchedAt, includeDebugDiagnostic
 }
 
 function buildMeteoFranceDebugErrorResponse({ fetchedAt, authMode, tokenOk, message, env }) {
+  const safeMessage = sanitizeMeteoFranceMessage(message);
+
   return {
     ok: false,
     enabled: true,
     source: "meteofrance-radar",
     fetchedAt,
-    message: sanitizeMeteoFranceMessage(message),
+    message: safeMessage,
+    wgr: normalizeMeteoFranceRadarSequence({
+      fetchedAt,
+      ok: false,
+      fallbackReason: safeMessage
+    }),
     diagnostics: {
       configured: true,
       authMode,
@@ -2447,7 +2469,7 @@ function createHdf5NumericReader(bytes, dataType) {
 }
 
 function getMeteoFranceRainColor(value) {
-  return METEOFRANCE_RAIN_PALETTE.find((step) => value >= step.min)?.rgba || METEOFRANCE_RAIN_PALETTE[METEOFRANCE_RAIN_PALETTE.length - 1].rgba;
+  return METEOFRANCE_RAIN_PALETTE.find((step) => value >= step.min)?.rgba || [0, 0, 0, 0];
 }
 
 function encodeAsciiBytes(value) {

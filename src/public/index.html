@@ -433,6 +433,48 @@
     </section>
 
     <section data-panel="diagnostic" hidden>
+      <section class="diagnostic-grid" aria-label="Diagnostic Weather Garden">
+        <article class="card diagnostic-card">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">WGR</p>
+              <h2>Weather Garden Radar</h2>
+            </div>
+          </div>
+          <dl id="diagnosticWgr" class="diagnostic-list"></dl>
+        </article>
+
+        <article class="card diagnostic-card">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">HDF5</p>
+              <h2>Météo-France radar</h2>
+            </div>
+          </div>
+          <dl id="diagnosticHdf5" class="diagnostic-list"></dl>
+        </article>
+
+        <article class="card diagnostic-card">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">RV</p>
+              <h2>RainViewer</h2>
+            </div>
+          </div>
+          <dl id="diagnosticRainViewer" class="diagnostic-list"></dl>
+        </article>
+
+        <article class="card diagnostic-card">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">WGF</p>
+              <h2>Weather Garden Forecast</h2>
+            </div>
+          </div>
+          <dl id="diagnosticWgf" class="diagnostic-list"></dl>
+        </article>
+      </section>
+
       <section class="card">
         <h2>Sources</h2>
         <ul id="sources" class="sources"></ul>
@@ -455,6 +497,6 @@
   </main>
 
   <script src="/assets/vendor/leaflet/leaflet.js"></script>
-  <script src="/app.js?v=20260517-wgr-mobile-fix" type="module"></script>
+  <script src="/app.js?v=20260517-dashboard-diagnostic" type="module"></script>
 </body>
 </html>

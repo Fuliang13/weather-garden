@@ -1577,19 +1577,19 @@ body[data-active-panel="garden"] .app-shell {
 }
 
 .radar-light {
-	background: #2f9ff5;
+	background: rgba(150, 218, 236, 0.8);
 }
 
 .radar-moderate {
-	background: #2d76d2;
+	background: rgba(38, 132, 204, 0.84);
 }
 
 .radar-heavy {
-	background: #7659c7;
+	background: rgba(126, 76, 186, 0.86);
 }
 
 .radar-extreme {
-	background: #b8416a;
+	background: rgba(190, 44, 58, 0.88);
 }
 
 .radar-legend-note {
@@ -1890,6 +1890,70 @@ button.secondary,
 	border-radius: 999px;
 	padding: 0.6rem 0.85rem;
 	text-decoration: none;
+}
+
+.diagnostic-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 1rem;
+	margin-bottom: 1rem;
+}
+
+.diagnostic-card {
+	min-width: 0;
+}
+
+.diagnostic-card .section-header {
+	margin-bottom: 0.55rem;
+}
+
+.diagnostic-list {
+	display: grid;
+	gap: 0.42rem;
+	margin: 0;
+}
+
+.diagnostic-list div {
+	display: grid;
+	grid-template-columns: minmax(8.5rem, 0.85fr) minmax(0, 1fr);
+	align-items: baseline;
+	gap: 0.75rem;
+	border-bottom: 1px solid color-mix(in srgb, var(--border) 68%, white);
+	padding: 0.34rem 0;
+}
+
+.diagnostic-list div:last-child {
+	border-bottom: 0;
+}
+
+.diagnostic-list dt {
+	color: var(--muted);
+	font-size: 0.78rem;
+	font-weight: 760;
+}
+
+.diagnostic-list dd {
+	min-width: 0;
+	margin: 0;
+	color: var(--text);
+	font-size: 0.86rem;
+	font-weight: 650;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+}
+
+.diagnostic-list div[data-state="fresh"] dd,
+.diagnostic-list div[data-state="fallback"] dd {
+	color: var(--accent);
+}
+
+.diagnostic-list div[data-state="stale"] dd,
+.diagnostic-list div[data-state="partial"] dd {
+	color: #8a5a10;
+}
+
+.diagnostic-list div[data-state="unavailable"] dd {
+	color: var(--danger);
 }
 
 .debug-output {
@@ -3369,6 +3433,10 @@ body[data-active-panel="dashboard"] .panel-nav {
 	white-space: nowrap;
 }
 
+.radar-opacity-control[hidden] {
+	display: none;
+}
+
 .radar-frame-control input,
 .radar-opacity-control input {
 	width: 100%;
@@ -3931,6 +3999,15 @@ body[data-active-panel="dashboard"] .panel-nav {
 }
 
 @media (max-width: 760px) {
+	.diagnostic-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.diagnostic-list div {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 0.1rem;
+	}
+
 	body[data-active-panel="dashboard"] .app-shell {
 		padding-top: 0.68rem;
 	}

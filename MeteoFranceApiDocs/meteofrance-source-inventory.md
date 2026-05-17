@@ -8,7 +8,7 @@ Ce fichier liste toutes les sources identifiees pour Weather Garden lors de la c
 
 | Source identifiee | Fiche documentaire | Statut Weather Garden |
 | --- | --- | --- |
-| Observations reseau sol temps reel | `meteofrance-observation-candidate-doc.md` | Candidate, non testee localement. |
+| Observations reseau sol temps reel | `meteofrance-observation-candidate-doc.md` | Candidate documentee, testee manuellement, non integree. |
 | API Donnees Climatologiques / DPClimatologie | `meteofrance-climatology-api-doc.md` | Candidate, non testee localement. |
 | Donnees agrometeorologiques decadaires | `meteofrance-climatology-api-doc.md` | Candidate, non testee localement. |
 | ETP Meteo-France | `meteofrance-climatology-api-doc.md` | Candidate, non testee localement. |
@@ -38,7 +38,7 @@ Ce fichier liste toutes les sources identifiees pour Weather Garden lors de la c
 | Archives Vigilance Metropole | `meteofrance-vigilance-api-doc.md` | Candidate, non testee localement. |
 | Vigilance Outre-mer V6 | `meteofrance-vigilance-api-doc.md` | Candidate, non testee localement. |
 | Bulletins avalanche temps reel et archives | `meteofrance-avalanche-nivology-api-doc.md` | Candidate specialisee, non testee localement. |
-| Observations SYNOP essentielles OMM | `meteofrance-observation-candidate-doc.md` | Candidate, non testee localement. |
+| Observations SYNOP essentielles OMM | `meteofrance-observation-candidate-doc.md` | Candidate documentee depuis la doc officielle, non testee localement. |
 | Observations nivo-meteorologiques | `meteofrance-avalanche-nivology-api-doc.md` | Candidate specialisee, non testee localement. |
 | Modele de simulation nivologique | `meteofrance-avalanche-nivology-api-doc.md` | Candidate specialisee, non testee localement. |
 | Bouees ancrees | `meteofrance-marine-coastal-api-doc.md` | Candidate specialisee, non testee localement. |

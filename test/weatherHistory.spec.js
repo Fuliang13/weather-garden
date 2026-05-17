@@ -461,7 +461,7 @@ function buildStatus(updatedAt = "2026-05-16T12:00:00.000Z") {
         source: "rainviewer",
         imageUrl: "https://example.test/rainviewer-token.png",
         freshnessMinutes: 5,
-        role: "radar-visual-fallback",
+        role: "radar-visual",
         priority: 3,
         errors: []
       }

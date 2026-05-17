@@ -495,11 +495,25 @@ describe("Meteo-France radar source", () => {
         }
       }));
 
-    await expect(fetchMeteoFranceRadar({
+    const radar = await fetchMeteoFranceRadar({
       env: {
         METEOFRANCE_APPLICATION_ID: "application-id"
       }
-    })).rejects.toThrow("instead of JSON");
+    });
+
+    expect(radar).toMatchObject({
+      ok: false,
+      enabled: true,
+      source: "meteofrance-radar",
+      diagnostics: {
+        configured: true,
+        authMode: "oauth2",
+        tokenOk: true,
+        catalogOk: false
+      }
+    });
+    expect(radar.message).toContain("instead of JSON");
+    expect(radar.wgr.status.available).toBe(false);
   });
 });
 

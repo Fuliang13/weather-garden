@@ -266,6 +266,10 @@ const els = {
   debugRainLink: document.querySelector("#debugRainLink"),
   debugOutput: document.querySelector("#debugOutput"),
   debugRefreshButton: document.querySelector("#debugRefreshButton"),
+  diagnosticWgr: document.querySelector("#diagnosticWgr"),
+  diagnosticHdf5: document.querySelector("#diagnosticHdf5"),
+  diagnosticRainViewer: document.querySelector("#diagnosticRainViewer"),
+  diagnosticWgf: document.querySelector("#diagnosticWgf"),
   ntfyTestButton: document.querySelector("#ntfyTestButton"),
   settingsForm: document.querySelector("#settingsForm"),
   settingsMessage: document.querySelector("#settingsMessage")
@@ -369,7 +373,7 @@ els.radarZoomToggleButton?.addEventListener("click", () => {
 document.querySelectorAll("[data-garden-action]").forEach((button) => {
   button.addEventListener("click", handleGardenAction);
 });
-els.debugRefreshButton?.addEventListener("click", () => loadDebugJson("/api/debug/status"));
+els.debugRefreshButton?.addEventListener("click", () => loadDiagnosticPanel());
 els.ntfyTestButton?.addEventListener("click", sendTestNotification);
 
 els.navButtons.forEach((button) => {
@@ -671,6 +675,47 @@ async function loadDebugJson(path) {
   }
 }
 
+async function loadDiagnosticPanel() {
+  if (els.debugOutput) {
+    els.debugOutput.textContent = "Chargement du diagnostic…";
+  }
+
+  try {
+    const [statusResult, hdf5Result] = await Promise.allSettled([
+      fetchJsonEndpoint("/api/debug/status"),
+      fetchJsonEndpoint("/api/debug/meteofrance/hdf5")
+    ]);
+    const debugStatus = statusResult.status === "fulfilled" ? statusResult.value : null;
+    const status = debugStatus?.status || debugStatus || state.status;
+    const hdf5 = hdf5Result.status === "fulfilled" ? hdf5Result.value : null;
+
+    renderDiagnosticCards(status, hdf5);
+
+    if (els.debugOutput) {
+      els.debugOutput.textContent = JSON.stringify({
+        status: status || null,
+        meteofranceHdf5: hdf5 || { ok: false, error: hdf5Result.reason?.message || "Diagnostic HDF5 indisponible." }
+      }, null, 2);
+    }
+  } catch (error) {
+    renderDiagnosticCards(state.status, null);
+    if (els.debugOutput) {
+      els.debugOutput.textContent = JSON.stringify({ ok: false, error: error.message }, null, 2);
+    }
+  }
+}
+
+async function fetchJsonEndpoint(path) {
+  const response = await fetch(path);
+  const data = await readJsonResponse(response);
+
+  if (!response.ok || data?.ok === false && !data?.diagnostics) {
+    throw new Error(data?.error || data?.message || `${path} indisponible`);
+  }
+
+  return data;
+}
+
 async function readJsonResponse(response) {
   const text = await response.text();
 
@@ -713,7 +758,240 @@ function renderStatus(status) {
   renderSources(status.sources || []);
   renderSettings(status.settings || {});
   renderDebugLinks();
+  if (document.body.dataset.activePanel === "diagnostic") {
+    renderDiagnosticCards(status, null);
+  }
   els.updatedAt.textContent = `Dernière mise à jour : ${formatDate(status.updatedAt)}`;
+}
+
+function renderDiagnosticCards(status = state.status, hdf5Debug = null) {
+  const radarModel = state.radarDisplayModel || buildRadarDisplayModel(status?.radar, status?.rain || {}, status?.wgr);
+  renderDiagnosticList(els.diagnosticWgr, buildWgrDiagnosticRows(status, radarModel));
+  renderDiagnosticList(els.diagnosticHdf5, buildHdf5DiagnosticRows(status, hdf5Debug));
+  renderDiagnosticList(els.diagnosticRainViewer, buildRainViewerDiagnosticRows(status, radarModel));
+  renderDiagnosticList(els.diagnosticWgf, buildWgfDiagnosticRows(status));
+}
+
+function renderDiagnosticList(target, rows) {
+  if (!target) {
+    return;
+  }
+
+  target.innerHTML = "";
+  rows.forEach(({ label, value, state: rowState }) => {
+    const group = document.createElement("div");
+    const term = document.createElement("dt");
+    const description = document.createElement("dd");
+
+    if (rowState) {
+      group.dataset.state = rowState;
+    }
+    term.textContent = label;
+    description.textContent = formatDiagnosticValue(value);
+    group.append(term, description);
+    target.append(group);
+  });
+}
+
+function buildWgrDiagnosticRows(status, model) {
+  const wgr = status?.wgr || {};
+  const radar = status?.radar || {};
+  const selectedSource = state.radarSourceMode;
+  const wgrVisualSource = getWgrVisualSource(radar, wgr);
+  const wgrFrames = wgrVisualSource === "meteofrance"
+    ? getNativeRadarFrames(radar.meteoFrance?.nativeLayer)
+    : getRainViewerFrames(radar.rainViewer);
+  const frameCount = wgrFrames.length || model?.radarFrames?.length || 0;
+  const validityTime = wgrFrames[Math.min(frameCount - 1, Math.max(0, model?.nativeFrameIndex || 0))]?.validityTime || model?.validityTime;
+  const overlayState = model?.nativeLayer
+    ? "Overlay MF natif ajouté"
+    : model?.rainViewerTileUrl
+      ? "Tuiles RainViewer ajoutées"
+      : "Aucun overlay exploitable";
+
+  return [
+    { label: "Source active", value: getDiagnosticRadarSourceLabel(selectedSource) },
+    { label: "Source WGR utilisée", value: getDiagnosticRadarSourceLabel(wgrVisualSource) },
+    { label: "État WGR", value: formatWgrState(wgr.state || model?.stateLevel), state: model?.stateLevel },
+    { label: "Fraîcheur", value: model?.freshnessLabel || model?.stateLabel },
+    { label: "Timestamp image", value: validityTime ? formatDate(validityTime) : model?.imageTimeLabel },
+    { label: "Frames", value: frameCount },
+    { label: "Playback", value: frameCount > 1 ? "Disponible" : "Image fixe" },
+    { label: "Proximité pluie", value: Number.isFinite(model?.nearestRainDistanceKm) ? `${Math.round(model.nearestRainDistanceKm)} km` : "Indisponible" },
+    { label: "Confiance", value: wgr.confidence?.label ? formatWgrConfidenceLabel(wgr.confidence.label) : wgr.confidence?.score },
+    { label: "Fallback réel", value: model?.fallbackLabel || "Non" },
+    { label: "Narration", value: model?.narrative || wgr.headline || "Indisponible" },
+    { label: "Overlay Leaflet", value: overlayState }
+  ];
+}
+
+function getWgrVisualSource(radar, wgr) {
+  if (wgr?.displayHints?.radarSource === "meteofrance" && radar?.meteoFrance?.nativeLayer?.ok) {
+    return "meteofrance";
+  }
+  if (wgr?.displayHints?.radarSource === "rainviewer" && getRainViewerFrames(radar?.rainViewer).length) {
+    return "rainviewer";
+  }
+  if (radar?.meteoFrance?.nativeLayer?.ok) {
+    return "meteofrance";
+  }
+  if (getRainViewerFrames(radar?.rainViewer).length) {
+    return "rainviewer";
+  }
+  return "none";
+}
+
+function buildHdf5DiagnosticRows(status, hdf5Debug) {
+  const meteoFrance = status?.radar?.meteoFrance || {};
+  const diagnostics = hdf5Debug?.diagnostics || meteoFrance.diagnostics || {};
+  const hdf5 = diagnostics.hdf5 || meteoFrance.metadata?.hdf5 || {};
+  const nativeLayer = meteoFrance.nativeLayer || {};
+  const nativeRaster = hdf5.nativeRaster || {};
+  const selectedDataset = hdf5.selectedDataset || {};
+  const nativeLayerAvailable = diagnostics.nativeLayerAvailable ?? !!nativeLayer.ok;
+  const imageAvailable = hdf5.nativeLayerImageDataUrlAvailable ?? !!nativeLayer.imageDataUrl;
+
+  return [
+    { label: "Configuré", value: diagnostics.configured ?? meteoFrance.enabled },
+    { label: "Mode auth", value: diagnostics.authMode || "Indisponible" },
+    { label: "Catalogue OK", value: diagnostics.catalogOk },
+    { label: "Produit 500", value: diagnostics.product500Found },
+    { label: "Produit 1000", value: diagnostics.product1000Found },
+    { label: "Téléchargement HDF5", value: hdf5.downloadOk },
+    { label: "HTTP status", value: hdf5.httpStatus },
+    { label: "Content-Type", value: hdf5.contentType },
+    { label: "Byte length", value: hdf5.byteLength },
+    { label: "Signature HDF5", value: hdf5.signatureOk },
+    { label: "Parser", value: hdf5.parser },
+    { label: "Parsing", value: hdf5.parsingOk },
+    { label: "Dataset pluie", value: selectedDataset.path || hdf5.radarDataset?.path },
+    { label: "Quantity", value: selectedDataset.quantity || hdf5.quantity || "ACRR" },
+    { label: "Dimensions source", value: formatDimensions(selectedDataset.dimensions || hdf5.dimensions || nativeRaster.sourceDimensions) },
+    { label: "Dimensions image", value: formatDimensions([nativeRaster.width || nativeLayer.width, nativeRaster.height || nativeLayer.height]) },
+    { label: "Bounds", value: hdf5.bounds ? "Disponibles" : nativeLayer.bounds ? "Disponibles via nativeLayer" : "Indisponibles" },
+    { label: "Image dataUrl", value: imageAvailable },
+    { label: "nativeLayerAvailable", value: nativeLayerAvailable, state: nativeLayerAvailable ? "fresh" : "unavailable" },
+    { label: "Blocker / reason", value: diagnostics.fallbackReason || hdf5.nativeLayerBlocker || hdf5.error || nativeLayer.reason || "Aucun" },
+    { label: "Timestamp image", value: (meteoFrance.validityTime || hdf5.validityTime) ? formatDate(meteoFrance.validityTime || hdf5.validityTime) : null },
+    { label: "Fraîcheur", value: formatDiagnosticSourceFreshness(findSourceStatus("meteofrance-radar")) }
+  ];
+}
+
+function buildRainViewerDiagnosticRows(status, model) {
+  const rainViewer = status?.radar?.rainViewer || {};
+  const frames = getRainViewerFrames(rainViewer);
+  const activeFrame = model?.sourceKey === "rainviewer" ? frames[model.nativeFrameIndex] || frames[frames.length - 1] : frames[frames.length - 1];
+  const sourceStatus = findSourceStatus("rainviewer");
+
+  return [
+    { label: "Disponible", value: !!frames.length && rainViewer.enabled !== false, state: frames.length ? "fresh" : "unavailable" },
+    { label: "Frames", value: frames.length },
+    { label: "Frame active", value: activeFrame?.validityTime ? formatDate(activeFrame.validityTime) : null },
+    { label: "Dernière frame", value: frames[frames.length - 1]?.validityTime ? formatDate(frames[frames.length - 1].validityTime) : rainViewer.frameTime },
+    { label: "Fraîcheur", value: formatDiagnosticSourceFreshness(sourceStatus) },
+    { label: "Playback", value: frames.length > 1 ? (state.radarNativeAnimationPaused ? "Disponible, en pause" : "Disponible, lecture") : "Image fixe" },
+    { label: "Erreurs", value: formatDiagnosticErrors(sourceStatus?.errors || rainViewer.errors) }
+  ];
+}
+
+function buildWgfDiagnosticRows(status) {
+  const comparison = status?.forecastComparison;
+  const immediate = getImmediateWgfForecast(comparison);
+  const horizon = comparison?.horizons?.find((item) => item.key === "1h") || comparison?.horizons?.[0] || {};
+  const sources = horizon.sources || {};
+  const sourceStatuses = status?.sources || [];
+  const sourceNames = [
+    sources.arome?.available ? "Open-Meteo / AROME" : null,
+    sources.metNorway?.available ? "MET Norway" : null,
+    sources.wgf?.available ? "WGF" : null,
+    status?.stationObservation ? "Ecowitt" : null
+  ].filter(Boolean);
+
+  return [
+    { label: "État synthèse", value: immediate?.available ? formatForecastState(immediate) : "Indisponible", state: immediate?.state },
+    { label: "Sources utilisées", value: sourceNames.length ? sourceNames.join(" · ") : "Aucune source exploitable" },
+    { label: "Open-Meteo / AROME", value: formatDiagnosticForecastSource(sources.arome, sourceStatuses.find((item) => item.id === "open-meteo-arome")) },
+    { label: "MET Norway", value: formatDiagnosticForecastSource(sources.metNorway, sourceStatuses.find((item) => item.id === "met-norway")) },
+    { label: "Ecowitt", value: formatDiagnosticSourceFreshness(sourceStatuses.find((item) => item.id === "ecowitt")) },
+    { label: "Horizon pluie immédiat", value: Number.isFinite(status?.rain?.etaMinutes) ? formatRainEta(status.rain.etaMinutes) : status?.rain?.headline },
+    { label: "Score / confiance", value: [formatForecastRain(immediate?.precipitationMm), formatWgfConfidence(immediate?.confidence)].filter(Boolean).join(" · ") },
+    { label: "Écart réel / modèles", value: buildDiagnosticDifferential(status) },
+    { label: "Raison dégradée", value: immediate?.reason || "Aucune" },
+    { label: "Dernier refresh", value: status?.updatedAt ? formatDate(status.updatedAt) : null }
+  ];
+}
+
+function formatDiagnosticValue(value) {
+  if (value === true) {
+    return "Oui";
+  }
+  if (value === false) {
+    return "Non";
+  }
+  if (Array.isArray(value)) {
+    return value.length ? value.join(" · ") : "Aucun";
+  }
+  if (value === null || value === undefined || value === "") {
+    return "Indisponible";
+  }
+  return String(value);
+}
+
+function getDiagnosticRadarSourceLabel(value) {
+  return {
+    wgr: "WGR",
+    meteofrance: "MF",
+    "meteofrance-radar": "MF",
+    rainviewer: "RV",
+    none: "Aucune"
+  }[value] || value || "Indisponible";
+}
+
+function formatWgrState(value) {
+  return {
+    native_ok: "MF natif vérifié",
+    fallback_rainviewer: "Bascule RainViewer réelle",
+    fresh: "Radar frais",
+    stale: "Image ancienne",
+    partial: "Données incomplètes",
+    unavailable: "Indisponible"
+  }[value] || value || "Indisponible";
+}
+
+function formatDimensions(value) {
+  const dimensions = Array.isArray(value) ? value.filter(Number.isFinite) : [];
+  return dimensions.length >= 2 ? `${dimensions[0]} × ${dimensions[1]}` : "Indisponible";
+}
+
+function formatDiagnosticSourceFreshness(source) {
+  if (!source) {
+    return "Indisponible";
+  }
+  const label = source.state === "fresh" ? "OK" : source.state === "stale" ? "Ancien" : "Indisponible";
+  return Number.isFinite(source.freshnessMinutes) ? `${label} · ${formatDuration(source.freshnessMinutes)}` : label;
+}
+
+function formatDiagnosticErrors(errors) {
+  const list = Array.isArray(errors) ? errors.filter(Boolean) : [];
+  return list.length ? list.join(" · ") : "Aucune";
+}
+
+function formatDiagnosticForecastSource(source, sourceStatus) {
+  const availability = source?.available ? "Disponible" : "Indisponible";
+  return [availability, formatDiagnosticSourceFreshness(sourceStatus || source)].filter(Boolean).join(" · ");
+}
+
+function buildDiagnosticDifferential(status) {
+  const station = status?.stationObservation || status?.observation?.station || null;
+  const immediate = getImmediateModelForecast(status?.forecastComparison);
+  const observedRainRate = station?.current?.rainRateMmPerHour;
+  const forecastRain = immediate?.precipitationMm;
+
+  if (!Number.isFinite(observedRainRate) && !Number.isFinite(forecastRain)) {
+    return "Indisponible";
+  }
+
+  return `${Number.isFinite(observedRainRate) ? formatRainRate(observedRainRate) : "obs. ?"} / ${Number.isFinite(forecastRain) ? formatRain(forecastRain) : "modèle ?"}`;
 }
 
 function renderNextRain(rain, comparison) {
@@ -3139,7 +3417,7 @@ function buildRadarNarrative({ wgr, rain, nearestRainDistanceKm, sourceLabel, se
   }
 
   if (fallbackLabel) {
-    parts.push(fallbackLabel.toLowerCase());
+    parts.push(fallbackLabel);
   } else if (sourceMode === "wgr") {
     parts.unshift(sourceLabel);
   }
@@ -3205,7 +3483,7 @@ function renderRadarMetadata(model) {
     els.radarValidity.textContent = model.imageTimeLabel;
   }
   if (els.radarFreshness) {
-    els.radarFreshness.textContent = model.stateLabel;
+    els.radarFreshness.textContent = model.freshnessLabel || model.stateLabel;
   }
   if (els.radarRadiusLabel) {
     els.radarRadiusLabel.textContent = Number.isFinite(model.nearestRainDistanceKm) ? `${radiusLabel} · pluie ${Math.round(model.nearestRainDistanceKm)} km` : radiusLabel;
@@ -3806,7 +4084,7 @@ function activatePanel(name) {
   });
 
   if (name === "diagnostic") {
-    loadDebugJson("/api/debug/status");
+    loadDiagnosticPanel();
   }
 
   if (name === "garden" && state.gardenMap) {

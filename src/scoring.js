@@ -723,7 +723,7 @@ function buildSourceSummaries(openMeteo, metNorway, meteoFranceRadar, rainViewer
       label: "RainViewer",
       payload: rainViewer,
       enabled: rainViewer ? rainViewer.enabled !== false : false,
-      role: "radar-visual-fallback",
+      role: "radar-visual",
       priority: 3,
       errors,
       extra: {
