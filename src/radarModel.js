@@ -44,6 +44,33 @@ const WGR_FUSION_HORIZONS = [
 const FUSION_RAIN_THRESHOLD_MM = 0.1;
 const FUSION_RAIN_PROBABILITY_THRESHOLD = 0.35;
 const NARRATIVE_LOCALE = "fr-FR";
+const GARDEN_IMPACT_LEVELS = new Set(["none", "info", "watch", "risk"]);
+const GARDEN_IMPACT_ENTITY_TYPES = new Set([
+  "vine",
+  "vegetable_bed",
+  "plant",
+  "tree",
+  "greenhouse",
+  "zone",
+  "weather_station",
+  "sensor",
+  "compost",
+  "water_tank",
+  "other"
+]);
+const GARDEN_IMPACT_ENTITY_RULES = {
+  vine: { category: "rain", headline: "Vigne à surveiller", advice: "Vérifie la vigne après l’épisode humide.", riskSensitive: true, tags: ["rain-sensitive", "humidity-sensitive"] },
+  vegetable_bed: { category: "rain", headline: "Potager à surveiller", advice: "Vérifie l’état du sol avant d’arroser.", riskSensitive: true, tags: ["rain-sensitive", "soil-sensitive"] },
+  plant: { category: "rain", headline: "Plante à surveiller", advice: "Surveille la zone après le passage de la pluie.", riskSensitive: true, tags: ["rain-sensitive"] },
+  tree: { category: "rain", headline: "Arbre à surveiller", advice: "Vérifie la zone après l’épisode si le sol devient très humide.", riskSensitive: false, tags: ["rain-context"] },
+  greenhouse: { category: "humidity", headline: "Serre à surveiller", advice: "Surveille la serre si l’humidité reste élevée.", riskSensitive: true, tags: ["humidity-sensitive"] },
+  zone: { category: "rain", headline: "Zone à surveiller", advice: "Surveille la zone après le passage de la pluie.", riskSensitive: false, tags: ["rain-context"] },
+  weather_station: { category: "source", headline: "Station météo à surveiller", advice: "Vérifie la cohérence de la station locale si la situation évolue.", riskSensitive: false, tags: ["source-context"] },
+  sensor: { category: "source", headline: "Capteur à surveiller", advice: "Vérifie le capteur si les données locales deviennent incohérentes.", riskSensitive: false, tags: ["source-context"] },
+  compost: { category: "rain", headline: "Compost à surveiller", advice: "Surveille le compost après l’épisode humide.", riskSensitive: false, tags: ["rain-context"] },
+  water_tank: { category: "rain", headline: "Réserve d’eau à surveiller", advice: "Vérifie le niveau de la réserve après l’épisode pluvieux.", riskSensitive: false, tags: ["rain-benefit"] },
+  other: { category: "rain", headline: "Entité à surveiller", advice: "Surveille la zone si l’épisode se renforce.", riskSensitive: false, tags: ["generic-context"] }
+};
 const NARRATIVE_TECHNICAL_PATTERN = /\b(nativeLayer|fallbackReason|HDF5|token|apikey|api_key|authorization|bearer|payload|score:|https?:\/\/)\b/i;
 const SENSITIVE_KEY_PATTERN = /(api|token|secret|key|authorization|header|cookie|signed|url|payload|raw|mac|imei)/i;
 const URL_PATTERN = /https?:\/\//i;
@@ -288,6 +315,17 @@ export function normalizeRadarSynthesis(input = {}) {
     sourcesUsed,
     sourcesIgnored
   }), { generatedAt });
+  const gardenImpact = normalizeWgrGardenImpact(input.gardenImpact || buildWgrGardenImpact({
+    generatedAt,
+    garden: input.garden || input.gardenState,
+    fusion,
+    narrative,
+    futureProjection,
+    timeline,
+    contributions,
+    sourcesUsed,
+    sourcesIgnored
+  }), { generatedAt });
 
   return {
     type: "RadarSynthesis",
@@ -313,6 +351,7 @@ export function normalizeRadarSynthesis(input = {}) {
     futureProjection,
     fusion,
     narrative,
+    gardenImpact,
     headline: normalizeString(input.headline) || narrative.headline,
     diagnostics: sanitizePublicDiagnostics(input.diagnostics || buildPublicDiagnostics({ globalState, sourcesUsed, sourcesIgnored })),
     derivedFrom: normalizeDerivedFrom(input.derivedFrom),
@@ -389,6 +428,99 @@ export function buildWgrNarrative({
       disagreementCount: signals.disagreements.length,
       sourceCount: signals.allSources.length,
       staleSourceCount: signals.staleSources.length,
+      publicSafe: true
+    }
+  }, { generatedAt: generatedIso });
+}
+
+
+export function buildWgrGardenImpact({
+  generatedAt = new Date(),
+  garden = null,
+  gardenState = null,
+  fusion = null,
+  narrative = null,
+  futureProjection = null,
+  timeline = null,
+  contributions = [],
+  sourcesUsed = [],
+  sourcesIgnored = []
+} = {}) {
+  const generatedIso = normalizeIsoDate(generatedAt) || new Date(0).toISOString();
+  const normalizedFusion = normalizeWgrFusion(fusion || {}, { generatedAt: generatedIso });
+  const normalizedNarrative = normalizeWgrNarrative(narrative || {}, { generatedAt: generatedIso });
+  const projection = normalizeFutureProjection(futureProjection || {}, { generatedAt: generatedIso });
+  const normalizedTimeline = timeline?.type === "WgrTimeline" ? timeline : buildWgrTimeline(timeline || {}, { generatedAt: generatedIso });
+  const normalizedContributions = Array.isArray(contributions)
+    ? contributions.map((item) => item?.type === "WgrSourceContribution" ? item : normalizeWgrSourceContribution(item, { now: generatedIso }))
+    : [];
+  const state = normalizeGardenImpactState(gardenState || garden);
+
+  if (!state.present) {
+    return normalizeWgrGardenImpact({
+      available: false,
+      status: "unavailable",
+      generatedAt: generatedIso,
+      summary: "Impact jardin indisponible : aucun GardenState exploitable.",
+      level: "none",
+      entities: [],
+      globalAdvice: "Surveille la situation avant toute intervention extérieure.",
+      confidence: "unavailable",
+      confidenceReasons: [],
+      degradationReasons: ["GardenState unavailable for WGR garden impact."],
+      limitText: "Aucune entité Jardin réelle n’est disponible pour calculer un impact.",
+      sourcesUsed: normalizeSourceList([...sourcesUsed, ...(normalizedFusion.sourcesUsed || [])]),
+      sourcesIgnored: normalizeSourceList(["garden-state", ...sourcesIgnored, ...(normalizedFusion.sourcesIgnored || [])]),
+      diagnostics: {
+        reason: "garden_state_unavailable",
+        entityCount: 0,
+        impactedEntityCount: 0,
+        publicSafe: true
+      }
+    }, { generatedAt: generatedIso });
+  }
+
+  const context = buildGardenImpactWeatherContext({
+    generatedAt: generatedIso,
+    fusion: normalizedFusion,
+    narrative: normalizedNarrative,
+    futureProjection: projection,
+    timeline: normalizedTimeline,
+    contributions: normalizedContributions,
+    sourcesUsed,
+    sourcesIgnored
+  });
+  const entities = state.entities
+    .map((entity) => buildGardenEntityImpact(entity, context))
+    .filter(Boolean);
+  const level = entities.length ? maxGardenImpactLevel(entities.map((entity) => entity.level)) : context.rainSignal ? "info" : "none";
+  const confidence = computeGardenImpactConfidence({ context, entities });
+  const nonLocalizedEntityCount = state.entities.filter((entity) => !entity.hasGeometry).length;
+  const concernedTypes = [...new Set(entities.map((entity) => entity.entityType))];
+  const available = state.entities.length > 0;
+  const status = !available ? "available" : context.degraded || context.disagreement ? "degraded" : "available";
+
+  return normalizeWgrGardenImpact({
+    available: true,
+    status,
+    generatedAt: generatedIso,
+    summary: buildGardenImpactSummary({ entityCount: state.entities.length, impactedCount: entities.length, level, rainSignal: context.rainSignal }),
+    level,
+    entities,
+    globalAdvice: buildGardenImpactGlobalAdvice({ level, rainSignal: context.rainSignal, modelOnly: context.modelOnly }),
+    confidence,
+    confidenceReasons: buildGardenImpactConfidenceReasons({ context, entities, confidence }),
+    degradationReasons: buildGardenImpactDegradationReasons({ context, nonLocalizedEntityCount, entities }),
+    limitText: buildGardenImpactLimitText({ state, context, nonLocalizedEntityCount }),
+    sourcesUsed: normalizeSourceList(["garden-state", ...context.sourcesUsed]),
+    sourcesIgnored: normalizeSourceList(context.sourcesIgnored),
+    diagnostics: {
+      entityCount: state.entities.length,
+      impactedEntityCount: entities.length,
+      concernedTypes,
+      nonLocalizedEntityCount,
+      rainSignal: context.rainSignal,
+      sourceCount: context.sourcesUsed.length,
       publicSafe: true
     }
   }, { generatedAt: generatedIso });
@@ -1224,6 +1356,391 @@ function normalizeFusionDisagreements(disagreements) {
     sources: normalizeSourceList(item.sources),
     reason: normalizeString(item.reason)
   })).filter((item) => item.type);
+}
+
+
+function normalizeWgrGardenImpact(input = {}, options = {}) {
+  const generatedAt = normalizeIsoDate(input.generatedAt || options.generatedAt) || new Date(0).toISOString();
+  const level = normalizeGardenImpactLevel(input.level);
+  const available = input.available === true;
+  const status = normalizeString(input.status || input.state) || (available ? "available" : "unavailable");
+  const entities = Array.isArray(input.entities) ? input.entities.map(normalizeGardenEntityImpact).filter(Boolean) : [];
+
+  return {
+    type: "WgrGardenImpact",
+    available,
+    status,
+    state: status,
+    generatedAt,
+    summary: sanitizeGardenImpactText(input.summary) || (available ? "Aucun impact jardin significatif." : "Impact jardin indisponible."),
+    level,
+    entities,
+    globalAdvice: sanitizeGardenImpactText(input.globalAdvice) || "Pas d’action particulière pour le moment.",
+    confidence: normalizeGardenImpactConfidenceLabel(input.confidence),
+    confidenceReasons: normalizeStringList(input.confidenceReasons),
+    degradationReasons: normalizeStringList(input.degradationReasons),
+    limitText: sanitizeGardenImpactText(input.limitText) || "Impact calculé uniquement avec les données Jardin et WGR disponibles.",
+    sourcesUsed: normalizeSourceList(input.sourcesUsed),
+    sourcesIgnored: normalizeSourceList(input.sourcesIgnored),
+    diagnostics: sanitizePublicDiagnostics(input.diagnostics),
+    publicSafe: true
+  };
+}
+
+function normalizeGardenEntityImpact(input = {}) {
+  const entityId = normalizeString(input.entityId);
+  const entityType = normalizeGardenEntityType(input.entityType);
+
+  if (!entityId || !entityType) {
+    return null;
+  }
+
+  return {
+    entityId,
+    entityName: sanitizeGardenImpactText(input.entityName) || entityId,
+    entityType,
+    level: normalizeGardenImpactLevel(input.level),
+    category: normalizeString(input.category) || "rain",
+    headline: sanitizeGardenImpactText(input.headline) || "Entité à surveiller",
+    details: sanitizeGardenImpactText(input.details) || "Une situation météo peut concerner cette entité.",
+    advice: sanitizeGardenImpactText(input.advice) || "Surveille la zone si la situation évolue.",
+    reasons: normalizeStringList(input.reasons),
+    confidence: normalizeGardenImpactConfidenceLabel(input.confidence),
+    sourceIds: normalizeSourceList(input.sourceIds),
+    tags: normalizeStringList(input.tags),
+    hasGeometry: input.hasGeometry === true,
+    limitText: sanitizeGardenImpactText(input.limitText),
+    publicSafe: true
+  };
+}
+
+function normalizeGardenImpactState(garden) {
+  if (!garden || typeof garden !== "object") {
+    return { present: false, entities: [] };
+  }
+
+  const rawEntities = Array.isArray(garden.entities)
+    ? garden.entities
+    : Array.isArray(garden.state?.entities)
+      ? garden.state.entities
+      : [];
+
+  return {
+    present: true,
+    updatedAt: normalizeIsoDate(garden.updatedAt),
+    entities: rawEntities.map(normalizeGardenImpactEntity).filter(Boolean)
+  };
+}
+
+function normalizeGardenImpactEntity(entity = {}) {
+  if (!entity || typeof entity !== "object") {
+    return null;
+  }
+
+  const id = normalizeString(entity.id || entity.name);
+  if (!id) {
+    return null;
+  }
+
+  const type = normalizeGardenEntityType(entity.type) || "other";
+  const tags = normalizeStringList(Array.isArray(entity.tags) ? entity.tags : typeof entity.tags === "string" ? entity.tags.split(",") : []);
+  const geometry = entity.geometry || entity.position?.geometry || null;
+  const hasGeometry = isGardenGeometryLike(geometry);
+
+  return {
+    id,
+    name: sanitizeGardenImpactText(entity.name) || id,
+    type,
+    tags,
+    hasGeometry,
+    hasPosition: hasGeometry || Number.isFinite(finiteOrNull(entity.position?.latitude)) && Number.isFinite(finiteOrNull(entity.position?.longitude)),
+    metadata: sanitizePublicDiagnostics(entity.metadata)
+  };
+}
+
+function buildGardenImpactWeatherContext({ generatedAt, fusion, narrative, futureProjection, timeline, contributions, sourcesUsed, sourcesIgnored }) {
+  const horizons = Array.isArray(fusion.horizons) ? fusion.horizons : [];
+  const nowHorizon = horizons.find((horizon) => horizon.horizonMinutes === 0) || null;
+  const futureHorizons = horizons.filter((horizon) => horizon.horizonMinutes > 0);
+  const sourceList = normalizeSourceList([
+    ...(Array.isArray(sourcesUsed) ? sourcesUsed : []),
+    ...(fusion.sourcesUsed || []),
+    ...contributions.filter((item) => item.used).map((item) => item.id)
+  ]);
+  const ignoredList = normalizeSourceList([
+    ...(Array.isArray(sourcesIgnored) ? sourcesIgnored : []),
+    ...(fusion.sourcesIgnored || []),
+    ...contributions.filter((item) => item.ignored).map((item) => item.id)
+  ]);
+  const staleSourceIds = normalizeSourceList([
+    ...contributions.filter((item) => item.freshness === "stale" || item.state === "stale").map((item) => item.id),
+    fusion.radarSignal?.freshness === "stale" ? fusion.radarSignal.sourceId : null,
+    fusion.stationSignal?.freshness === "stale" ? "ecowitt" : null,
+    ...(Array.isArray(fusion.modelSignal?.sources) ? fusion.modelSignal.sources.filter((item) => item.freshness === "stale").map((item) => item.sourceId) : [])
+  ]);
+  const futureRain = futureHorizons.some((horizon) => horizon.available && horizon.rainLikely === true);
+  const observedRain = fusion.localRainSignal?.rainLikelyNow === true || nowHorizon?.rainLikely === true || fusion.radarSignal?.rainLikely === true || fusion.stationSignal?.rainLikely === true;
+  const modelRain = Array.isArray(fusion.modelSignal?.sources) && fusion.modelSignal.sources.some((model) => model.available && (model.horizons || []).some((horizon) => horizon.available && horizon.rainLikely));
+  const projectionRain = futureProjection.available === true && Array.isArray(futureProjection.frames) && futureProjection.frames.some((frame) => frame.available !== false);
+  const heavyRain = [nowHorizon, ...futureHorizons].some((horizon) => normalizeString(horizon?.intensity?.level) === "heavy");
+  const disagreement = Array.isArray(fusion.disagreements) && fusion.disagreements.length > 0;
+  const degraded = fusion.status === "degraded" || narrative.status === "degraded" || staleSourceIds.length > 0 || disagreement;
+  const modelOnly = !observedRain && modelRain;
+  const confidence = normalizeGardenImpactConfidenceLabel(fusion.confidence?.label || narrative.tags?.find((tag) => /confidence$/.test(tag))?.replace("-confidence", ""));
+
+  return {
+    generatedAt,
+    observedRain,
+    futureRain,
+    modelRain,
+    projectionRain,
+    modelOnly,
+    rainSignal: observedRain || futureRain || modelRain || projectionRain,
+    heavyRain,
+    disagreement,
+    degraded,
+    staleSourceIds,
+    confidence,
+    sourcesUsed: sourceList,
+    sourcesIgnored: ignoredList,
+    sourceIds: sourceList,
+    currentFrame: timeline?.currentFrame || null,
+    futureProjection,
+    fusion,
+    narrative
+  };
+}
+
+function buildGardenEntityImpact(entity, context) {
+  const rule = gardenImpactRuleForEntity(entity);
+  if (!context.rainSignal && !(entity.type === "weather_station" && context.staleSourceIds.includes("ecowitt"))) {
+    return null;
+  }
+
+  const level = computeGardenEntityImpactLevel({ entity, rule, context });
+  if (level === "none") {
+    return null;
+  }
+
+  const confidence = computeGardenEntityImpactConfidence(context);
+  const reasons = buildGardenEntityImpactReasons({ entity, context, level });
+
+  return normalizeGardenEntityImpact({
+    entityId: entity.id,
+    entityName: entity.name,
+    entityType: entity.type,
+    level,
+    category: rule.category,
+    headline: rule.headline,
+    details: buildGardenEntityImpactDetails({ entity, context, level }),
+    advice: rule.advice,
+    reasons,
+    confidence,
+    sourceIds: context.sourceIds,
+    tags: normalizeStringList([...rule.tags, entity.hasGeometry ? null : "non-localized", context.modelOnly ? "model-only" : null, context.disagreement ? "sources-diverge" : null]),
+    hasGeometry: entity.hasGeometry,
+    limitText: entity.hasGeometry ? null : "Entité sans géométrie : impact non localisé."
+  });
+}
+
+function computeGardenEntityImpactLevel({ entity, rule, context }) {
+  if (!context.rainSignal) {
+    return "none";
+  }
+
+  let level = "info";
+  if (context.modelOnly) {
+    level = "info";
+  } else if ((context.observedRain || context.futureRain || context.projectionRain) && ["vine", "vegetable_bed", "plant", "greenhouse", "zone"].includes(entity.type)) {
+    level = "watch";
+  }
+
+  if (context.heavyRain && rule.riskSensitive && ["high", "medium"].includes(context.confidence) && !context.disagreement && !context.staleSourceIds.length) {
+    level = "risk";
+  }
+
+  if (context.disagreement || context.staleSourceIds.length) {
+    level = downgradeGardenImpactLevel(level);
+  }
+
+  if (["weather_station", "sensor", "compost", "water_tank", "other", "tree"].includes(entity.type) && level === "risk") {
+    level = "watch";
+  }
+
+  return level;
+}
+
+function buildGardenEntityImpactDetails({ entity, context, level }) {
+  if (context.modelOnly) {
+    return "Une pluie est possible selon les modèles, sans confirmation locale suffisante.";
+  }
+  if (context.heavyRain && level === "risk") {
+    return "Une pluie forte est signalée par les données WGR disponibles.";
+  }
+  if (context.observedRain) {
+    return "Une pluie est observée par les sources WGR disponibles.";
+  }
+  if (context.futureRain || context.projectionRain) {
+    return "Une pluie est possible à court terme.";
+  }
+  if (entity.type === "weather_station" && context.staleSourceIds.includes("ecowitt")) {
+    return "La station locale est ancienne dans la synthèse WGR.";
+  }
+  return "Une situation météo peut concerner cette entité.";
+}
+
+function buildGardenEntityImpactReasons({ entity, context, level }) {
+  return normalizeStringList([
+    `entity_type:${entity.type}`,
+    entity.tags.length ? `entity_tags:${entity.tags.join(",")}` : null,
+    entity.hasGeometry ? "geometry_available" : "geometry_missing",
+    context.observedRain ? "wgr_observed_rain" : null,
+    context.futureRain || context.projectionRain ? "wgr_short_term_rain" : null,
+    context.modelOnly ? "model_rain_without_local_confirmation" : null,
+    context.heavyRain ? "heavy_rain_signal" : null,
+    context.disagreement ? "source_disagreement_limits_confidence" : null,
+    context.staleSourceIds.length ? "stale_sources_limit_confidence" : null,
+    level === "risk" ? "risk_level_requires_strong_signal" : null
+  ]);
+}
+
+function gardenImpactRuleForEntity(entity) {
+  return GARDEN_IMPACT_ENTITY_RULES[entity.type] || GARDEN_IMPACT_ENTITY_RULES.other;
+}
+
+function computeGardenImpactConfidence({ context, entities }) {
+  if (!entities.length && !context.rainSignal) {
+    return "medium";
+  }
+  if (context.disagreement || context.staleSourceIds.length || context.modelOnly) {
+    return "low";
+  }
+  if (context.confidence === "high" && entities.some((entity) => entity.level === "risk" || entity.level === "watch")) {
+    return "high";
+  }
+  return context.confidence === "unavailable" ? "low" : "medium";
+}
+
+function computeGardenEntityImpactConfidence(context) {
+  if (context.disagreement || context.staleSourceIds.length || context.modelOnly) {
+    return "low";
+  }
+  if (context.confidence === "high") {
+    return "high";
+  }
+  return context.confidence === "unavailable" ? "low" : "medium";
+}
+
+function buildGardenImpactConfidenceReasons({ context, entities, confidence }) {
+  return normalizeStringList([
+    entities.length ? "real_garden_entities_analyzed" : "no_impacted_entity",
+    context.observedRain ? "wgr_observed_rain_used" : null,
+    context.futureRain || context.projectionRain ? "wgr_short_term_signal_used" : null,
+    context.modelOnly ? "model_rain_without_local_confirmation" : null,
+    context.disagreement ? "source_disagreement_reduces_confidence" : null,
+    context.staleSourceIds.length ? "stale_sources_reduce_confidence" : null,
+    `confidence:${confidence}`
+  ]);
+}
+
+function buildGardenImpactDegradationReasons({ context, nonLocalizedEntityCount, entities }) {
+  return normalizeStringList([
+    context.disagreement ? "source_disagreement_limits_garden_impact" : null,
+    context.staleSourceIds.length ? "stale_sources_limit_garden_impact" : null,
+    context.modelOnly ? "model_only_rain_signal" : null,
+    nonLocalizedEntityCount > 0 && entities.length > 0 ? "some_entities_without_geometry" : null
+  ]);
+}
+
+function buildGardenImpactLimitText({ state, context, nonLocalizedEntityCount }) {
+  if (!state.entities.length) {
+    return "Aucune entité Jardin réelle n’est disponible pour détailler un impact.";
+  }
+  if (context.modelOnly) {
+    return "Impact prudent : les modèles indiquent de la pluie, mais le radar ou la station ne confirment pas encore.";
+  }
+  if (context.disagreement) {
+    return "Impact limité : les sources WGR ne sont pas totalement cohérentes.";
+  }
+  if (context.staleSourceIds.length) {
+    return "Impact limité : certaines sources WGR sont anciennes.";
+  }
+  if (nonLocalizedEntityCount > 0) {
+    return "Impact calculé depuis les types d’entités, sans localisation spatiale complète pour toutes les entités.";
+  }
+  return "Impact calculé depuis les types d’entités Jardin et la synthèse WGR disponible.";
+}
+
+function buildGardenImpactSummary({ entityCount, impactedCount, level, rainSignal }) {
+  if (!entityCount) {
+    return "Aucune entité Jardin à analyser.";
+  }
+  if (!rainSignal || impactedCount === 0) {
+    return "Aucune zone du jardin à surveiller pour le moment.";
+  }
+  if (level === "risk") {
+    return `${impactedCount} ${pluralizeZone(impactedCount)} du jardin avec risque météo à surveiller.`;
+  }
+  return `${impactedCount} ${pluralizeZone(impactedCount)} du jardin à surveiller.`;
+}
+
+function buildGardenImpactGlobalAdvice({ level, rainSignal, modelOnly }) {
+  if (!rainSignal) {
+    return "Pas d’action particulière pour le moment.";
+  }
+  if (modelOnly) {
+    return "Surveille la situation avant toute intervention extérieure.";
+  }
+  if (level === "risk") {
+    return "Évite les interventions extérieures pendant l’épisode et vérifie les zones sensibles après son passage.";
+  }
+  if (level === "watch") {
+    return "Surveille les zones sensibles si l’épisode se renforce.";
+  }
+  return "Vérifie l’état du sol avant d’arroser.";
+}
+
+function pluralizeZone(count) {
+  return count > 1 ? "zones" : "zone";
+}
+
+function maxGardenImpactLevel(levels) {
+  const order = { none: 0, info: 1, watch: 2, risk: 3 };
+  return levels.reduce((best, level) => order[level] > order[best] ? level : best, "none");
+}
+
+function downgradeGardenImpactLevel(level) {
+  if (level === "risk") {
+    return "watch";
+  }
+  return level;
+}
+
+function normalizeGardenImpactLevel(value) {
+  const normalized = normalizeString(value);
+  return GARDEN_IMPACT_LEVELS.has(normalized) ? normalized : "none";
+}
+
+function normalizeGardenImpactConfidenceLabel(value) {
+  const normalized = normalizeString(value);
+  return CONFIDENCE_LABELS.has(normalized) ? normalized : "unknown";
+}
+
+function normalizeGardenEntityType(value) {
+  const normalized = normalizeString(value);
+  return GARDEN_IMPACT_ENTITY_TYPES.has(normalized) ? normalized : "other";
+}
+
+function isGardenGeometryLike(value) {
+  return !!value && typeof value === "object" && ["Point", "LineString", "Polygon", "MultiPolygon"].includes(value.type);
+}
+
+function sanitizeGardenImpactText(value) {
+  const text = normalizeString(value);
+  if (!text || NARRATIVE_TECHNICAL_PATTERN.test(text) || URL_PATTERN.test(text)) {
+    return null;
+  }
+  return text;
 }
 
 function normalizeWgrNarrative(input = {}, options = {}) {

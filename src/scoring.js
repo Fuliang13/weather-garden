@@ -146,6 +146,7 @@ export function buildWeatherStatus({
     openMeteo,
     metNorway,
     ecowittObservation,
+    garden,
     rain: rainStatus,
     now
   });

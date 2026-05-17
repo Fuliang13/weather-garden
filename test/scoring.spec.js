@@ -154,6 +154,37 @@ describe("weather scoring", () => {
     expect(alerts[0].details.every((detail) => typeof detail === "string")).toBe(true);
   });
 
+
+  it("passes GardenState to WGR garden impact", () => {
+    const now = new Date("2026-05-06T12:00:00.000Z");
+    const garden = normalizeGardenState({
+      entities: [{ id: "potager", type: "vegetable_bed", name: "Potager" }]
+    }, now);
+    const status = buildWeatherStatus({
+      location: DEFAULT_LOCATION,
+      settings: DEFAULT_SETTINGS,
+      openMeteo: buildOpenMeteoForecast(now, { precipitationMm: 1.2, temperatureC: 12, windKmh: 6, gustKmh: 14 }),
+      metNorway: null,
+      meteoFranceRadar: null,
+      rainViewer: null,
+      ecowittObservation: null,
+      garden,
+      now
+    });
+
+    expect(status.wgr.gardenImpact).toMatchObject({
+      available: true,
+      level: "info",
+      confidence: "low",
+      entities: [expect.objectContaining({
+        entityId: "potager",
+        entityType: "vegetable_bed",
+        level: "info"
+      })]
+    });
+    expect(status.wgr.gardenImpact.limitText).toContain("radar ou la station ne confirment pas encore");
+  });
+
   it("marks stale Ecowitt observations in status.sources without exposing raw payloads", () => {
     const now = new Date("2026-05-06T12:00:00.000Z");
     const ecowittObservation = normalizeEcowittPayload({

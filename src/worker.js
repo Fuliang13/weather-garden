@@ -283,7 +283,7 @@ async function computeAndStoreStatus(env) {
     meteoFranceRadar,
     rainViewer,
     ecowittObservation,
-    garden: null,
+    garden: gardenState,
     errors
   });
 

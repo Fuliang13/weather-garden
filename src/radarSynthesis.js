@@ -1,6 +1,7 @@
 import {
   buildWgrFusion,
   buildWgrFutureProjection,
+  buildWgrGardenImpact,
   buildWgrNarrative,
   buildWgrTimeline,
   normalizeRadarSynthesis,
@@ -78,6 +79,17 @@ export function buildWgrSynthesis({
     sourcesIgnored: contributions.filter((item) => item.ignored).map((item) => item.id),
     rain
   });
+  const gardenImpact = buildWgrGardenImpact({
+    generatedAt: now,
+    garden,
+    fusion,
+    narrative,
+    futureProjection,
+    timeline,
+    contributions,
+    sourcesUsed: contributions.filter((item) => item.used).map((item) => item.id),
+    sourcesIgnored: contributions.filter((item) => item.ignored).map((item) => item.id)
+  });
   const explanations = buildExplanations({
     state,
     globalState,
@@ -127,6 +139,7 @@ export function buildWgrSynthesis({
       futureProjection,
       fusion,
       narrative,
+      gardenImpact,
       diagnostics: {
         globalState,
         radarStatusCount: sourceStatus.length,
