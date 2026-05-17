@@ -3936,3 +3936,97 @@ body[data-active-panel="dashboard"] .panel-nav {
 		min-height: 2.34rem;
 	}
 }
+
+
+/* WGR mobile stability fix */
+@media (max-width: 860px) {
+	.dashboard-weather-layout {
+		display: grid;
+		width: 100%;
+		max-width: 100%;
+		grid-template-areas: none;
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.dashboard-column,
+	.dashboard-radar-stage {
+		display: grid;
+		width: 100%;
+		max-width: 100%;
+		min-width: 0;
+		grid-area: auto;
+	}
+
+	.dashboard-radar-stage {
+		order: 1;
+	}
+
+	.dashboard-column-left {
+		order: 2;
+	}
+
+	.dashboard-column-right {
+		order: 3;
+	}
+
+	.dashboard-block-rain,
+	.radar-card,
+	.radar-zoom-status,
+	.dashboard-block-next-rain,
+	.dashboard-block-station,
+	.dashboard-block-rain-horizons,
+	.dashboard-block-alerts,
+	.dashboard-block-sources,
+	.dashboard-block-radar-control {
+		width: 100%;
+		max-width: 100%;
+		min-width: 0;
+		grid-area: auto;
+	}
+
+	.dashboard-block-radar-control {
+		display: none;
+	}
+}
+
+@media (max-width: 760px) {
+	.radar-card {
+		display: grid;
+		min-width: 0;
+		overflow: hidden;
+	}
+
+	.radar-card-header {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.radar-card-header > div,
+	.radar-card-actions,
+	.radar-map-shell,
+	.radar-map-frame,
+	.radar-legend,
+	.radar-zoom-status {
+		min-width: 0;
+		max-width: 100%;
+	}
+
+	.radar-card-actions {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+
+	.radar-card-actions button {
+		min-width: 0;
+		padding-inline: 0.45rem;
+	}
+
+	.radar-map-shell {
+		width: 100%;
+		overflow: hidden;
+	}
+
+	.radar-map-frame {
+		width: min(100%, calc(100vw - 3.25rem));
+	}
+}
